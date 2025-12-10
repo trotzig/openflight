@@ -44,8 +44,6 @@ Thumbs.db
 # Project specific
 shots/
 logs/
-*.json
-!pyproject.toml
 
 # Test artifacts
 test_camera.jpg
