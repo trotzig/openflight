@@ -1,6 +1,10 @@
-# OpenLaunch
+<p align="center">
+  <img src="docs/logo.png" alt="OpenLaunch" width="400">
+</p>
 
-DIY Golf Launch Monitor using the OPS243-A Doppler Radar.
+<p align="center">
+  DIY Golf Launch Monitor using the OPS243-A Doppler Radar.
+</p>
 
 ## Overview
 
