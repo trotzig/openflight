@@ -56,7 +56,8 @@ function App() {
       <main className="main">
         {currentView === 'live' && (
           <div className="live-view">
-            <ShotDisplay shot={latestShot} isLatest={true} />
+            {latestShot && <div key={latestShot.timestamp} className="shot-flash" />}
+            <ShotDisplay key={latestShot?.timestamp} shot={latestShot} isLatest={true} />
             {mockMode && (
               <button className="simulate-button" onClick={simulateShot}>
                 Simulate Shot

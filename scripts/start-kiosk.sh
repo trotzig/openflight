@@ -112,14 +112,16 @@ log "Launching kiosk browser..."
 
 # Try different browsers in order of preference
 # DISPLAY=:0 allows running on Pi's display when SSHed in
+# --password-store=basic disables the keyring unlock prompt
+CHROME_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic"
 if command -v chromium-browser &> /dev/null; then
-    DISPLAY=:0 chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble "http://$HOST:$PORT" &
+    DISPLAY=:0 chromium-browser $CHROME_FLAGS "http://$HOST:$PORT" &
     BROWSER_PID=$!
 elif command -v chromium &> /dev/null; then
-    DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble "http://$HOST:$PORT" &
+    DISPLAY=:0 chromium $CHROME_FLAGS "http://$HOST:$PORT" &
     BROWSER_PID=$!
 elif command -v google-chrome &> /dev/null; then
-    DISPLAY=:0 google-chrome --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble "http://$HOST:$PORT" &
+    DISPLAY=:0 google-chrome $CHROME_FLAGS "http://$HOST:$PORT" &
     BROWSER_PID=$!
 elif command -v firefox &> /dev/null; then
     DISPLAY=:0 firefox --kiosk "http://$HOST:$PORT" &
