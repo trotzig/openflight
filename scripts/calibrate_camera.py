@@ -64,6 +64,10 @@ def main():
                         help="Brightness threshold (0-255)")
     parser.add_argument("--min-radius", type=int, default=5)
     parser.add_argument("--max-radius", type=int, default=50)
+    parser.add_argument("--hough-param2", type=int, default=20,
+                        help="Hough circle detection sensitivity (lower = more detections, default 20)")
+    parser.add_argument("--use-contours", action="store_true",
+                        help="Use contour detection instead of Hough circles")
     args = parser.parse_args()
 
     print("=" * 50)
@@ -90,6 +94,8 @@ def main():
         "threshold": args.threshold,
         "min_radius": args.min_radius,
         "max_radius": args.max_radius,
+        "hough_param2": args.hough_param2,
+        "use_contours": args.use_contours,
         "show_threshold": False,
         "show_detection": not args.no_detect,
     }
@@ -209,31 +215,59 @@ def main():
             if settings["show_detection"]:
                 # Detect circles
                 blurred = cv2.GaussianBlur(thresh, (5, 5), 0)
-                circles = cv2.HoughCircles(
-                    blurred,
-                    cv2.HOUGH_GRADIENT,
-                    dp=1.2,
-                    minDist=50,
-                    param1=50,
-                    param2=20,
-                    minRadius=settings["min_radius"],
-                    maxRadius=settings["max_radius"]
-                )
 
-                if circles is not None:
-                    circles = np.uint16(np.around(circles))
-                    for i in circles[0, :]:
-                        cx, cy, r = i[0], i[1], i[2]
-                        # Draw detected circle
-                        cv2.circle(display, (cx, cy), r, (0, 255, 0), 2)
-                        # Draw center
-                        cv2.circle(display, (cx, cy), 3, (0, 0, 255), -1)
-                        # Show radius
-                        cv2.putText(
-                            display, f"r={r}",
-                            (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5, (0, 255, 0), 1
-                        )
+                if settings["use_contours"]:
+                    # Alternative: contour-based detection (better for bright blobs)
+                    contours, _ = cv2.findContours(blurred, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for contour in contours:
+                        area = cv2.contourArea(contour)
+                        min_area = 3.14159 * settings["min_radius"] ** 2
+                        max_area = 3.14159 * settings["max_radius"] ** 2
+
+                        if min_area <= area <= max_area:
+                            # Fit a circle to the contour
+                            (cx, cy), r = cv2.minEnclosingCircle(contour)
+                            cx, cy, r = int(cx), int(cy), int(r)
+
+                            # Check circularity (perimeter^2 / area, perfect circle = 4*pi)
+                            perimeter = cv2.arcLength(contour, True)
+                            if perimeter > 0:
+                                circularity = 4 * 3.14159 * area / (perimeter ** 2)
+                                if circularity > 0.5:  # At least 50% circular
+                                    cv2.circle(display, (cx, cy), r, (0, 255, 0), 2)
+                                    cv2.circle(display, (cx, cy), 3, (0, 0, 255), -1)
+                                    cv2.putText(
+                                        display, f"r={r} c={circularity:.2f}",
+                                        (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.5, (0, 255, 0), 1
+                                    )
+                else:
+                    # Hough circle detection
+                    circles = cv2.HoughCircles(
+                        blurred,
+                        cv2.HOUGH_GRADIENT,
+                        dp=1.2,
+                        minDist=50,
+                        param1=50,
+                        param2=settings["hough_param2"],
+                        minRadius=settings["min_radius"],
+                        maxRadius=settings["max_radius"]
+                    )
+
+                    if circles is not None:
+                        circles = np.uint16(np.around(circles))
+                        for i in circles[0, :]:
+                            cx, cy, r = i[0], i[1], i[2]
+                            # Draw detected circle
+                            cv2.circle(display, (cx, cy), r, (0, 255, 0), 2)
+                            # Draw center
+                            cv2.circle(display, (cx, cy), 3, (0, 0, 255), -1)
+                            # Show radius
+                            cv2.putText(
+                                display, f"r={r}",
+                                (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.5, (0, 255, 0), 1
+                            )
 
             # Draw settings overlay
             y_offset = 20
