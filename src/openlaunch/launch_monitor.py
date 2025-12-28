@@ -334,15 +334,20 @@ class LaunchMonitor:
 
         # Filter by realistic speeds
         if not min_speed <= reading.speed <= self.MAX_BALL_SPEED_MPH:
+            print(f"[FILTER] Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}")
             return
 
         # Only accept outbound readings (ball/club moving away from radar)
         if reading.direction != Direction.OUTBOUND:
+            print(f"[FILTER] Direction {reading.direction.value} is not outbound")
             return
+
+        print(f"[ACCEPTED] {reading.speed:.1f} mph {reading.direction.value} - buffered: {len(self._current_readings)}")
 
         # Check if this is part of current shot or new shot
         if self._current_readings and (now - self._last_reading_time) > self.SHOT_TIMEOUT_SEC:
             # Previous shot complete, process it
+            print(f"[TIMEOUT] Processing shot with {len(self._current_readings)} readings")
             self._process_shot()
 
         # Track shot start time
@@ -363,6 +368,7 @@ class LaunchMonitor:
         3. Typical club: 70-130 mph, ball: 100-190 mph
         """
         if len(self._current_readings) < self.MIN_READINGS_FOR_SHOT:
+            print(f"[REJECTED] Only {len(self._current_readings)} readings (need {self.MIN_READINGS_FOR_SHOT})")
             self._current_readings = []
             return
 
@@ -420,10 +426,14 @@ class LaunchMonitor:
         )
 
         self._shots.append(shot)
+        print(f"[SHOT CREATED] {ball_speed:.1f} mph from {len(self._current_readings)} readings")
 
         # Callback
         if self._shot_callback:
+            print(f"[CALLBACK] Calling shot callback...")
             self._shot_callback(shot)
+        else:
+            print(f"[WARN] No shot callback registered!")
 
         # Clear for next shot
         self._current_readings = []
