@@ -517,27 +517,32 @@ def on_shot_detected(shot: Shot):
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
     # Capture camera tracking data if available
+    # Wrapped in try/except to ensure shot is always emitted even if camera fails
     camera_data = None
-    if camera_tracker and camera_enabled:
-        launch_angle = camera_tracker.calculate_launch_angle()
-        if launch_angle:
-            # Update shot with launch angle data
-            shot.launch_angle_vertical = launch_angle.vertical
-            shot.launch_angle_horizontal = launch_angle.horizontal
-            shot.launch_angle_confidence = launch_angle.confidence
+    try:
+        if camera_tracker and camera_enabled:
+            launch_angle = camera_tracker.calculate_launch_angle()
+            if launch_angle:
+                # Update shot with launch angle data
+                shot.launch_angle_vertical = launch_angle.vertical
+                shot.launch_angle_horizontal = launch_angle.horizontal
+                shot.launch_angle_confidence = launch_angle.confidence
 
-            camera_data = {
-                "launch_angle_vertical": launch_angle.vertical,
-                "launch_angle_horizontal": launch_angle.horizontal,
-                "launch_angle_confidence": launch_angle.confidence,
-                "positions_tracked": len(launch_angle.positions),
-                "launch_detected": camera_tracker.launch_detected,
-            }
+                camera_data = {
+                    "launch_angle_vertical": launch_angle.vertical,
+                    "launch_angle_horizontal": launch_angle.horizontal,
+                    "launch_angle_confidence": launch_angle.confidence,
+                    "positions_tracked": len(launch_angle.positions),
+                    "launch_detected": camera_tracker.launch_detected,
+                }
 
-        # Reset camera tracker for next shot
-        camera_tracker.reset()
-        ball_detected = False
-        ball_detection_confidence = 0.0
+            # Reset camera tracker for next shot
+            camera_tracker.reset()
+            ball_detected = False
+            ball_detection_confidence = 0.0
+    except Exception as e:
+        print(f"[WARN] Camera processing error: {e}")
+        camera_data = None
 
     shot_data = shot_to_dict(shot)
     stats = monitor.get_session_stats() if monitor else {}
