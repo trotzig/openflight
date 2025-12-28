@@ -19,7 +19,7 @@ from flask_socketio import SocketIO
 from flask_cors import CORS
 
 from .launch_monitor import LaunchMonitor, Shot, ClubType
-from .ops243 import SpeedReading
+from .ops243 import SpeedReading, Direction
 
 # Camera imports (optional)
 try:
@@ -340,6 +340,10 @@ def log_debug_reading(reading: SpeedReading):
 
 def on_live_reading(reading: SpeedReading):
     """Callback for live radar readings - used in debug mode."""
+    # Filter out inbound readings (backswing, etc.)
+    if reading.direction != Direction.OUTBOUND:
+        return
+
     # Log to file if debug mode is on
     if debug_mode:
         log_debug_reading(reading)
