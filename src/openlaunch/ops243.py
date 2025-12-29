@@ -443,8 +443,9 @@ class OPS243Radar:
         # Enable direction field in JSON output (critical for filtering)
         self.enable_direction_report(True)
 
-        # Minimum speed 10 mph to filter noise/slow movements
-        self.set_min_speed_filter(10)
+        # Minimum speed 50 mph to filter backswing/slow movements
+        # Ball speeds are typically 80+ mph, backswing club speeds are 20-40 mph
+        self.set_min_speed_filter(50)
 
         # Filter for outbound direction (ball moving away from radar)
         # Assumes radar is positioned behind the tee
@@ -602,12 +603,10 @@ class OPS243Radar:
                 elif dir_str == 'inbound':
                     direction = Direction.INBOUND
                 else:
-                    # Fallback to sign convention if direction field missing
-                    # Per OPS243 API: R+ = inbound, R- = outbound
-                    # So positive speed = inbound (toward), negative speed = outbound (away)
-                    # BUT if hardware filter R- is working, we should only get outbound readings
-                    direction = Direction.INBOUND if speed > 0 else Direction.OUTBOUND
-                    logger.warning(f"No direction field in JSON, speed={speed:.2f}, inferred: {direction.value}")
+                    # Hardware filter R- is set to "Away Only", so all readings we receive
+                    # are outbound by definition. The sign doesn't indicate direction.
+                    direction = Direction.OUTBOUND
+                    logger.debug(f"No direction field, assuming OUTBOUND (hardware filter active)")
 
                 # Log parsed reading for debugging
                 logger.debug(f"PARSED: speed={abs(speed):.2f} dir={direction.value} raw_dir='{dir_str}' mag={magnitude}")
@@ -619,11 +618,9 @@ class OPS243Radar:
                     timestamp=time.time(),
                     unit=self._unit
                 )
-            # Plain number format
-            # Per OPS243 API: R+ = inbound, R- = outbound
-            # So positive speed = inbound (toward), negative speed = outbound (away)
+            # Plain number format - hardware filter ensures we only get outbound
             speed = float(line)
-            direction = Direction.INBOUND if speed > 0 else Direction.OUTBOUND
+            direction = Direction.OUTBOUND
             logger.debug(f"PARSED (plain): speed={abs(speed):.2f} dir={direction.value}")
 
             return SpeedReading(
