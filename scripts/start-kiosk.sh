@@ -11,6 +11,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PORT=8080
 HOST="localhost"
 MOCK_MODE=false
+RADAR_LOG=false
 CAMERA_MODE=true  # Camera enabled by default
 CAMERA_MODEL="models/golf_ball_yolo11n_new_256.onnx"
 CAMERA_IMGSZ=256
@@ -22,6 +23,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --mock|-m)
             MOCK_MODE=true
+            shift
+            ;;
+        --radar-log)
+            RADAR_LOG=true
             shift
             ;;
         --camera|-c)
@@ -114,6 +119,10 @@ SERVER_CMD="openlaunch-server --web-port $PORT"
 
 if [ "$MOCK_MODE" = true ]; then
     SERVER_CMD="$SERVER_CMD --mock"
+fi
+
+if [ "$RADAR_LOG" = true ]; then
+    SERVER_CMD="$SERVER_CMD --radar-log"
 fi
 
 if [ "$CAMERA_MODE" = true ]; then

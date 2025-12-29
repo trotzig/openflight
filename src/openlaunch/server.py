@@ -5,6 +5,7 @@ Provides real-time shot data to the web frontend via Flask-SocketIO.
 """
 
 import json
+import logging
 import os
 import random
 import statistics
@@ -20,6 +21,9 @@ from flask_cors import CORS
 
 from .launch_monitor import LaunchMonitor, Shot, ClubType
 from .ops243 import SpeedReading, Direction
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Camera imports (optional)
 try:
@@ -324,7 +328,22 @@ def start_debug_logging():
     debug_log_path = log_dir / f"debug_{timestamp}.jsonl"
     debug_log_file = open(debug_log_path, "w")  # pylint: disable=consider-using-with
 
+    # Enable radar raw logging
+    radar_logger = logging.getLogger("ops243")
+    radar_raw_logger = logging.getLogger("ops243.raw")
+    radar_logger.setLevel(logging.DEBUG)
+    radar_raw_logger.setLevel(logging.DEBUG)
+
+    # Add file handler for raw radar data
+    raw_log_path = log_dir / f"radar_raw_{timestamp}.log"
+    file_handler = logging.FileHandler(raw_log_path)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+    radar_raw_logger.addHandler(file_handler)
+    radar_logger.addHandler(file_handler)
+
     print(f"Debug logging to: {debug_log_path}")
+    print(f"Raw radar logging to: {raw_log_path}")
     return str(debug_log_path)
 
 
@@ -343,6 +362,7 @@ def log_debug_reading(reading: SpeedReading):
     if debug_log_file:
         entry = {
             "timestamp": datetime.now().isoformat(),
+            "type": "reading",
             "speed": reading.speed,
             "direction": reading.direction.value,
             "magnitude": reading.magnitude,
@@ -351,24 +371,30 @@ def log_debug_reading(reading: SpeedReading):
         debug_log_file.write(json.dumps(entry) + "\n")
         debug_log_file.flush()
 
+        # Also print to console for immediate feedback
+        print(f"[RADAR] {reading.speed:.1f} mph {reading.direction.value} (mag={reading.magnitude})")
+
 
 def on_live_reading(reading: SpeedReading):
     """Callback for live radar readings - used in debug mode."""
-    # Filter out inbound readings (backswing, etc.)
-    if reading.direction != Direction.OUTBOUND:
-        return
-
-    # Log to file if debug mode is on
+    # Log ALL readings first (before filtering) so we can debug direction issues
     if debug_mode:
         log_debug_reading(reading)
 
-        # Emit to UI
+        # Emit ALL readings to UI debug panel (including inbound)
         socketio.emit("debug_reading", {
             "speed": reading.speed,
             "direction": reading.direction.value,
             "magnitude": reading.magnitude,
             "timestamp": datetime.now().isoformat(),
+            "filtered": reading.direction != Direction.OUTBOUND,
         })
+
+    # Filter out inbound readings for shot detection
+    # Note: shot filtering happens in launch_monitor.py but we also filter here
+    # for any UI purposes that need only outbound readings
+    if reading.direction != Direction.OUTBOUND:
+        return
 
 
 @socketio.on("connect")
@@ -753,6 +779,7 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug mode")
+    parser.add_argument("--radar-log", action="store_true", help="Log raw radar data to console")
     parser.add_argument(
         "--camera", "-c", action="store_true", help="Enable camera for ball detection"
     )
@@ -778,6 +805,18 @@ def main():
     print("  OpenLaunch UI Server")
     print("=" * 50)
     print()
+
+    # Configure radar logging if requested
+    if args.radar_log:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        radar_logger = logging.getLogger("ops243")
+        radar_raw_logger = logging.getLogger("ops243.raw")
+        radar_logger.setLevel(logging.DEBUG)
+        radar_raw_logger.setLevel(logging.DEBUG)
+        print("Radar raw logging ENABLED - all readings will be logged")
 
     # Start the monitor
     start_monitor(port=args.port, mock=args.mock)

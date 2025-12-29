@@ -18,6 +18,7 @@ Speed limits by sample rate (per API docs):
 """
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -26,6 +27,10 @@ from typing import Callable, List, Optional
 
 import serial
 import serial.tools.list_ports
+
+# Configure logging for raw radar data
+logger = logging.getLogger("ops243")
+raw_logger = logging.getLogger("ops243.raw")
 
 
 class SpeedUnit(Enum):
@@ -545,6 +550,9 @@ class OPS243Radar:
             if not line:
                 return None
 
+            # Log raw data for debugging
+            raw_logger.debug(f"RAW: {line}")
+
             return self._parse_reading(line)
         except serial.SerialException:
             return None
@@ -575,6 +583,10 @@ class OPS243Radar:
                 else:
                     # Fallback to sign convention if direction field missing
                     direction = Direction.OUTBOUND if speed < 0 else Direction.INBOUND
+                    logger.warning(f"No direction field in JSON, using sign fallback: {direction.value}")
+
+                # Log parsed reading for debugging
+                logger.debug(f"PARSED: speed={abs(speed):.2f} dir={direction.value} raw_dir='{dir_str}' mag={magnitude}")
 
                 return SpeedReading(
                     speed=abs(speed),
@@ -587,6 +599,7 @@ class OPS243Radar:
             # Per OPS243-A convention: negative = outbound (away), positive = inbound (toward)
             speed = float(line)
             direction = Direction.OUTBOUND if speed < 0 else Direction.INBOUND
+            logger.debug(f"PARSED (plain): speed={abs(speed):.2f} dir={direction.value}")
 
             return SpeedReading(
                 speed=abs(speed),
@@ -594,7 +607,8 @@ class OPS243Radar:
                 timestamp=time.time(),
                 unit=self._unit
             )
-        except (ValueError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse reading: {line!r} - {e}")
             return None
 
     def start_streaming(self, callback: Callable[[SpeedReading], None]):
