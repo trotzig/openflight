@@ -1,11 +1,12 @@
 """
 Camera-based ball tracking for launch angle detection.
 
-Uses YOLO to detect the golf ball across multiple frames and
+Uses YOLO or Roboflow to detect the golf ball across multiple frames and
 calculates launch angle from the trajectory.
 """
 
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional, List
@@ -16,6 +17,12 @@ try:
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
+
+try:
+    from inference_sdk import InferenceHTTPClient
+    ROBOFLOW_AVAILABLE = True
+except ImportError:
+    ROBOFLOW_AVAILABLE = False
 
 try:
     import cv2
@@ -83,6 +90,8 @@ class CameraTracker:
         camera_angle_degrees: float = 0,
         frame_width: int = 640,
         frame_height: int = 480,
+        roboflow_api_key: Optional[str] = None,
+        roboflow_model_id: Optional[str] = None,
     ):
         """
         Initialize the camera tracker.
@@ -94,14 +103,36 @@ class CameraTracker:
             camera_angle_degrees: Camera tilt angle (0 = level, positive = tilted up)
             frame_width: Camera frame width in pixels
             frame_height: Camera frame height in pixels
+            roboflow_api_key: Roboflow API key (uses Roboflow if provided)
+            roboflow_model_id: Roboflow model ID (e.g., "golfballdetector/10")
         """
-        if not YOLO_AVAILABLE:
-            raise ImportError("ultralytics required: pip install ultralytics")
         if not CV2_AVAILABLE:
             raise ImportError("opencv required: pip install opencv-python")
 
-        self.model = YOLO(model_path)
+        # Determine which backend to use
+        self.use_roboflow = roboflow_model_id is not None
+        self.model = None
+        self.roboflow_client = None
+        self.roboflow_model_id = roboflow_model_id
         self.model_path = model_path
+
+        if self.use_roboflow:
+            if not ROBOFLOW_AVAILABLE:
+                raise ImportError("inference-sdk required: pip install inference-sdk")
+
+            # Get API key from parameter or environment
+            api_key = roboflow_api_key or os.environ.get("ROBOFLOW_API_KEY")
+
+            self.roboflow_client = InferenceHTTPClient(
+                api_url="https://detect.roboflow.com",
+                api_key=api_key,
+            )
+            print(f"Using Roboflow model: {roboflow_model_id}")
+        else:
+            if not YOLO_AVAILABLE:
+                raise ImportError("ultralytics required: pip install ultralytics")
+            self.model = YOLO(model_path)
+            print(f"Using local YOLO model: {model_path}")
 
         # Camera calibration
         self.camera_height = camera_height_inches
@@ -144,37 +175,13 @@ class CameraTracker:
             self.launch_detected = False
             self.launch_positions = []
 
-        # Run YOLO detection
-        results = self.model(frame, conf=self.MIN_CONFIDENCE, verbose=False)
-
-        # Find ball detections
+        # Run detection based on backend
         ball_detections = []
-        for r in results:
-            for box in r.boxes:
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
-                class_name = self.model.names[cls]
 
-                # Check if it's a ball (works with fine-tuned or generic model)
-                is_ball = (
-                    cls == self.SPORTS_BALL_CLASS or
-                    'ball' in class_name.lower() or
-                    'golf' in class_name.lower()
-                )
-
-                if is_ball:
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    cx = int((x1 + x2) / 2)
-                    cy = int((y1 + y2) / 2)
-                    radius = int((x2 - x1 + y2 - y1) / 4)  # Average of width/height / 2
-
-                    ball_detections.append(BallPosition(
-                        x=cx,
-                        y=cy,
-                        radius=radius,
-                        confidence=conf,
-                        timestamp=now
-                    ))
+        if self.use_roboflow:
+            ball_detections = self._detect_roboflow(frame, now)
+        else:
+            ball_detections = self._detect_yolo(frame, now)
 
         if not ball_detections:
             return None
@@ -206,6 +213,80 @@ class CameraTracker:
                     self.launch_positions.append(curr)
 
         return best
+
+    def _detect_yolo(self, frame: np.ndarray, timestamp: float) -> List[BallPosition]:
+        """Run YOLO detection on frame."""
+        ball_detections = []
+
+        results = self.model(frame, conf=self.MIN_CONFIDENCE, verbose=False)
+
+        for r in results:
+            for box in r.boxes:
+                cls = int(box.cls[0])
+                conf = float(box.conf[0])
+                class_name = self.model.names[cls]
+
+                # Check if it's a ball (works with fine-tuned or generic model)
+                is_ball = (
+                    cls == self.SPORTS_BALL_CLASS or
+                    'ball' in class_name.lower() or
+                    'golf' in class_name.lower()
+                )
+
+                if is_ball:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+                    radius = int((x2 - x1 + y2 - y1) / 4)
+
+                    ball_detections.append(BallPosition(
+                        x=cx,
+                        y=cy,
+                        radius=radius,
+                        confidence=conf,
+                        timestamp=timestamp
+                    ))
+
+        return ball_detections
+
+    def _detect_roboflow(self, frame: np.ndarray, timestamp: float) -> List[BallPosition]:
+        """Run Roboflow detection on frame."""
+        ball_detections = []
+
+        try:
+            # Encode frame as JPEG for API
+            _, buffer = cv2.imencode('.jpg', frame)
+            image_bytes = buffer.tobytes()
+
+            # Run inference via Roboflow API
+            result = self.roboflow_client.infer(image_bytes, model_id=self.roboflow_model_id)
+
+            # Parse predictions
+            predictions = result.get('predictions', [])
+            for pred in predictions:
+                conf = pred.get('confidence', 0)
+                if conf < self.MIN_CONFIDENCE:
+                    continue
+
+                # Get bounding box (Roboflow returns center + width/height)
+                cx = int(pred.get('x', 0))
+                cy = int(pred.get('y', 0))
+                width = int(pred.get('width', 0))
+                height = int(pred.get('height', 0))
+                radius = int((width + height) / 4)
+
+                ball_detections.append(BallPosition(
+                    x=cx,
+                    y=cy,
+                    radius=radius,
+                    confidence=conf,
+                    timestamp=timestamp
+                ))
+
+        except Exception as e:
+            print(f"Roboflow detection error: {e}")
+
+        return ball_detections
 
     def calculate_launch_angle(self) -> Optional[LaunchAngle]:
         """

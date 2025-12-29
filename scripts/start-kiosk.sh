@@ -12,7 +12,9 @@ PORT=8080
 HOST="localhost"
 MOCK_MODE=false
 CAMERA_MODE=true  # Camera enabled by default
-CAMERA_MODEL="models/golf_ball_yolo11n.onnx"
+CAMERA_MODEL="models/golf_ball_yolo11n_new.onnx"
+ROBOFLOW_MODEL=""
+ROBOFLOW_API_KEY=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,6 +33,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --camera-model)
             CAMERA_MODEL="$2"
+            shift 2
+            ;;
+        --roboflow-model)
+            ROBOFLOW_MODEL="$2"
+            shift 2
+            ;;
+        --roboflow-api-key)
+            ROBOFLOW_API_KEY="$2"
             shift 2
             ;;
         --port|-p)
@@ -102,7 +112,15 @@ if [ "$MOCK_MODE" = true ]; then
 fi
 
 if [ "$CAMERA_MODE" = true ]; then
-    SERVER_CMD="$SERVER_CMD --camera --camera-model $CAMERA_MODEL"
+    SERVER_CMD="$SERVER_CMD --camera"
+    if [ -n "$ROBOFLOW_MODEL" ]; then
+        SERVER_CMD="$SERVER_CMD --roboflow-model $ROBOFLOW_MODEL"
+        if [ -n "$ROBOFLOW_API_KEY" ]; then
+            SERVER_CMD="$SERVER_CMD --roboflow-api-key $ROBOFLOW_API_KEY"
+        fi
+    else
+        SERVER_CMD="$SERVER_CMD --camera-model $CAMERA_MODEL"
+    fi
 fi
 
 # Start the server
@@ -113,7 +131,11 @@ else
 fi
 
 if [ "$CAMERA_MODE" = true ]; then
-    log "Camera enabled with model: $CAMERA_MODEL"
+    if [ -n "$ROBOFLOW_MODEL" ]; then
+        log "Camera enabled with Roboflow model: $ROBOFLOW_MODEL"
+    else
+        log "Camera enabled with local model: $CAMERA_MODEL"
+    fi
 fi
 
 $SERVER_CMD &

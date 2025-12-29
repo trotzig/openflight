@@ -96,8 +96,12 @@ def static_files(path):
 
 
 # Camera functions
-def init_camera(model_path: str = "models/golf_ball_yolo11n.onnx", imgsz: int = 256):
-    """Initialize camera and YOLO tracker."""
+def init_camera(
+    model_path: str = "models/golf_ball_yolo11n_new.onnx",
+    roboflow_model_id: str = None,
+    roboflow_api_key: str = None,
+):
+    """Initialize camera and ball tracker (YOLO or Roboflow)."""
     global camera, camera_tracker  # pylint: disable=global-statement
 
     if not CV2_AVAILABLE:
@@ -120,19 +124,25 @@ def init_camera(model_path: str = "models/golf_ball_yolo11n.onnx", imgsz: int = 
         camera.start()
         time.sleep(0.5)
 
-        # Initialize YOLO tracker
-        if os.path.exists(model_path):
+        # Initialize tracker - Roboflow or local YOLO
+        if roboflow_model_id:
+            camera_tracker = CameraTracker(
+                roboflow_model_id=roboflow_model_id,
+                roboflow_api_key=roboflow_api_key,
+            )
+            print(f"Camera initialized with Roboflow model: {roboflow_model_id}")
+        elif os.path.exists(model_path):
             camera_tracker = CameraTracker(model_path=model_path)
-            print(f"Camera initialized with model: {model_path}")
+            print(f"Camera initialized with local model: {model_path}")
         else:
             # Try default models
-            for fallback in ["models/golf_ball_yolo11n.pt", "yolov8n.pt"]:
+            for fallback in ["models/golf_ball_yolo11n_new.onnx", "models/golf_ball_yolo11n.pt", "yolov8n.pt"]:
                 if os.path.exists(fallback):
                     camera_tracker = CameraTracker(model_path=fallback)
                     print(f"Camera initialized with fallback model: {fallback}")
                     break
             else:
-                print("No YOLO model found - detection disabled")
+                print("No model found - detection disabled")
                 camera_tracker = None
 
         return True
@@ -743,8 +753,16 @@ def main():
         "--camera", "-c", action="store_true", help="Enable camera for ball detection"
     )
     parser.add_argument(
-        "--camera-model", default="models/golf_ball_yolo11n.onnx",
+        "--camera-model", default="models/golf_ball_yolo11n_new.onnx",
         help="Path to YOLO model for ball detection"
+    )
+    parser.add_argument(
+        "--roboflow-model",
+        help="Roboflow model ID (e.g., 'golfballdetector/10'). Uses Roboflow API instead of local YOLO."
+    )
+    parser.add_argument(
+        "--roboflow-api-key",
+        help="Roboflow API key (can also use ROBOFLOW_API_KEY env var)"
     )
     args = parser.parse_args()
 
@@ -762,9 +780,16 @@ def main():
 
     # Initialize camera if requested
     if args.camera:
-        if init_camera(model_path=args.camera_model):
+        if init_camera(
+            model_path=args.camera_model,
+            roboflow_model_id=args.roboflow_model,
+            roboflow_api_key=args.roboflow_api_key,
+        ):
             start_camera_thread()
-            print(f"Camera enabled with model: {args.camera_model}")
+            if args.roboflow_model:
+                print(f"Camera enabled with Roboflow model: {args.roboflow_model}")
+            else:
+                print(f"Camera enabled with local model: {args.camera_model}")
         else:
             print("Camera initialization failed - running without camera")
 
