@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import Enum
 
 from .ops243 import OPS243Radar, SpeedReading, Direction
+from .session_logger import get_session_logger
 
 
 class ClubType(Enum):
@@ -320,6 +321,7 @@ class LaunchMonitor:
     def _on_reading(self, reading: SpeedReading):
         """Process incoming speed readings."""
         now = time.time()
+        logger = get_session_logger()
 
         # Call live callback if set
         if self._live_callback:
@@ -335,15 +337,23 @@ class LaunchMonitor:
 
         # Filter by realistic speeds
         if not min_speed <= reading.speed <= self.MAX_BALL_SPEED_MPH:
-            print(f"[FILTER] Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}")
+            reason = f"Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}"
+            print(f"[FILTER] {reason}")
+            if logger:
+                logger.log_filtered_reading(reading, reason, filter_type="speed")
             return
 
         # Only accept outbound readings (ball/club moving away from radar)
         if reading.direction != Direction.OUTBOUND:
-            print(f"[FILTER] Direction {reading.direction.value} is not outbound")
+            reason = f"Direction {reading.direction.value} is not outbound"
+            print(f"[FILTER] {reason}")
+            if logger:
+                logger.log_filtered_reading(reading, reason, filter_type="direction")
             return
 
         print(f"[ACCEPTED] {reading.speed:.1f} mph {reading.direction.value} - buffered: {len(self._current_readings)}")
+        if logger:
+            logger.log_accepted_reading(reading)
 
         # Check if this is part of current shot or new shot
         if self._current_readings and (now - self._last_reading_time) > self.SHOT_TIMEOUT_SEC:
@@ -428,6 +438,24 @@ class LaunchMonitor:
 
         self._shots.append(shot)
         print(f"[SHOT CREATED] {ball_speed:.1f} mph from {len(self._current_readings)} readings")
+
+        # Log shot to session logger
+        logger = get_session_logger()
+        if logger:
+            readings_data = [
+                {"speed": r.speed, "direction": r.direction.value, "magnitude": r.magnitude}
+                for r in self._current_readings
+            ]
+            logger.log_shot(
+                ball_speed_mph=ball_speed,
+                club_speed_mph=club_speed,
+                smash_factor=shot.smash_factor,
+                estimated_carry_yards=shot.estimated_carry_yards,
+                club=self._current_club.value,
+                peak_magnitude=peak_mag,
+                readings_count=len(self._current_readings),
+                readings=readings_data
+            )
 
         # Callback
         if self._shot_callback:

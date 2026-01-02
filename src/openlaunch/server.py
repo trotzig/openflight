@@ -21,6 +21,7 @@ from flask_cors import CORS
 
 from .launch_monitor import LaunchMonitor, Shot, ClubType
 from .ops243 import SpeedReading, Direction
+from .session_logger import init_session_logger, get_session_logger
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -539,7 +540,12 @@ def handle_set_radar_config(data):
                 radar_config["transmit_power"] = new_power
                 print(f"Set transmit power: {new_power}")
 
-        # Log config change if debug mode is on
+        # Log config change
+        session_logger = get_session_logger()
+        if session_logger:
+            session_logger.log_config_change(radar_config.copy(), source="user")
+
+        # Legacy debug logging
         if debug_mode and debug_log_file:
             entry = {
                 "timestamp": datetime.now().isoformat(),
@@ -589,6 +595,18 @@ def on_shot_detected(shot: Shot):
                 }
                 print(f"[CAMERA] Launch angle: {launch_angle.vertical:.1f}° (conf: {launch_angle.confidence:.0%})")
 
+                # Log camera data to session logger
+                session_logger = get_session_logger()
+                if session_logger:
+                    session_logger.log_camera_data(
+                        shot_number=session_logger.stats.get("shots_detected", 0),
+                        launch_angle_vertical=launch_angle.vertical,
+                        launch_angle_horizontal=launch_angle.horizontal,
+                        confidence=launch_angle.confidence,
+                        positions_tracked=len(launch_angle.positions),
+                        launch_detected=camera_tracker.launch_detected
+                    )
+
             # Reset camera tracker for next shot
             camera_tracker.reset()
             ball_detected = False
@@ -634,12 +652,31 @@ def start_monitor(port: Optional[str] = None, mock: bool = False):
         monitor = LaunchMonitor(port=port)
 
     monitor.connect()
+
+    # Start session logging
+    session_logger = get_session_logger()
+    if session_logger and not mock:
+        radar_info = monitor.get_radar_info()
+        session_logger.start_session(
+            radar_port=port,
+            firmware_version=radar_info.get("Version"),
+            camera_enabled=camera is not None,
+            camera_model=camera_tracker.model_path if camera_tracker else None,
+            config=radar_config.copy()
+        )
+
     monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
 
 
 def stop_monitor():
     """Stop the launch monitor."""
     global monitor  # pylint: disable=global-statement
+
+    # End session logging
+    session_logger = get_session_logger()
+    if session_logger:
+        session_logger.end_session()
+
     if monitor:
         monitor.stop()
         monitor.disconnect()
@@ -799,12 +836,39 @@ def main():
         "--roboflow-api-key",
         help="Roboflow API key (can also use ROBOFLOW_API_KEY env var)"
     )
+    parser.add_argument(
+        "--session-location", "-l", default="range",
+        help="Location identifier for session logs (e.g., 'range', 'course', 'home')"
+    )
+    parser.add_argument(
+        "--log-dir",
+        help="Directory for session logs (default: ~/openlaunch_sessions)"
+    )
+    parser.add_argument(
+        "--no-logging", action="store_true",
+        help="Disable session logging"
+    )
     args = parser.parse_args()
 
     print("=" * 50)
     print("  OpenLaunch UI Server")
     print("=" * 50)
     print()
+
+    # Initialize session logger
+    if not args.no_logging and not args.mock:
+        from pathlib import Path
+        log_dir = Path(args.log_dir) if args.log_dir else None
+        init_session_logger(
+            log_dir=log_dir,
+            location=args.session_location,
+            enabled=True
+        )
+        print(f"Session logging enabled (location: {args.session_location})")
+    else:
+        init_session_logger(enabled=False)
+        if args.no_logging:
+            print("Session logging DISABLED")
 
     # Configure radar logging if requested
     if args.radar_log:
