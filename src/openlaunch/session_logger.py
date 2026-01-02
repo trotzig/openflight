@@ -39,9 +39,6 @@ class SessionLogger:
     Log entry types:
     - session_start: Session metadata
     - session_end: Session summary
-    - reading_raw: Raw radar reading (before parsing)
-    - reading_parsed: Parsed reading with direction
-    - reading_filtered: Reading that was filtered out (with reason)
     - reading_accepted: Reading that passed all filters
     - shot_detected: A shot was recorded
     - shot_camera: Camera tracking data for a shot
@@ -77,11 +74,6 @@ class SessionLogger:
 
         # Counters for session summary
         self._stats = {
-            "readings_raw": 0,
-            "readings_parsed": 0,
-            "readings_filtered_direction": 0,
-            "readings_filtered_speed": 0,
-            "readings_filtered_magnitude": 0,
             "readings_accepted": 0,
             "shots_detected": 0,
             "errors": 0,
@@ -194,11 +186,6 @@ class SessionLogger:
                 self._stats["shots_detected"] / max(1, self._stats["readings_accepted"])
                 if self._stats["readings_accepted"] > 0 else 0
             ),
-            "filter_rate": {
-                "direction": self._stats["readings_filtered_direction"] / max(1, self._stats["readings_parsed"]),
-                "speed": self._stats["readings_filtered_speed"] / max(1, self._stats["readings_parsed"]),
-                "magnitude": self._stats["readings_filtered_magnitude"] / max(1, self._stats["readings_parsed"]),
-            }
         }
 
         self._write_entry("session_end", summary)
@@ -236,68 +223,6 @@ class SessionLogger:
 
         self._session_file.write(json.dumps(entry) + "\n")
         self._session_file.flush()
-
-    def log_raw_reading(self, raw_line: str):
-        """Log raw radar output before parsing."""
-        if not self.enabled:
-            return
-
-        self._stats["readings_raw"] += 1
-        self._write_entry("reading_raw", {"raw": raw_line})
-
-    def log_parsed_reading(self, reading: SpeedReading, raw_speed: float):
-        """
-        Log a parsed reading with direction info.
-
-        Args:
-            reading: Parsed SpeedReading object
-            raw_speed: Original signed speed value from radar
-        """
-        if not self.enabled:
-            return
-
-        self._stats["readings_parsed"] += 1
-
-        self._write_entry("reading_parsed", {
-            "raw_speed": raw_speed,
-            "abs_speed": reading.speed,
-            "direction": reading.direction.value,
-            "magnitude": reading.magnitude,
-            "unit": reading.unit,
-        })
-
-    def log_filtered_reading(
-        self,
-        reading: SpeedReading,
-        reason: str,
-        filter_type: str = "unknown"
-    ):
-        """
-        Log a reading that was filtered out.
-
-        Args:
-            reading: The filtered reading
-            reason: Human-readable reason for filtering
-            filter_type: Type of filter (direction, speed, magnitude)
-        """
-        if not self.enabled:
-            return
-
-        # Update stats based on filter type
-        if filter_type == "direction":
-            self._stats["readings_filtered_direction"] += 1
-        elif filter_type == "speed":
-            self._stats["readings_filtered_speed"] += 1
-        elif filter_type == "magnitude":
-            self._stats["readings_filtered_magnitude"] += 1
-
-        self._write_entry("reading_filtered", {
-            "speed": reading.speed,
-            "direction": reading.direction.value,
-            "magnitude": reading.magnitude,
-            "reason": reason,
-            "filter_type": filter_type,
-        })
 
     def log_accepted_reading(self, reading: SpeedReading):
         """Log a reading that passed all filters and will be processed."""

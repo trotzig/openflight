@@ -389,9 +389,11 @@ class OPS243Radar:
         """
         Clear direction filter to allow both directions.
 
-        When the filter is cleared (R|), the sign of the speed value indicates direction:
-        - Positive speed = Inbound (toward radar)
-        - Negative speed = Outbound (away from radar)
+        When the filter is cleared (R|), the sign of the speed value indicates direction.
+
+        Per API documentation AN-010-AD (cosine error correction naming convention):
+        - Positive speed = INBOUND (toward radar)
+        - Negative speed = OUTBOUND (away from radar)
 
         This is required to determine direction in software.
         """
@@ -426,9 +428,10 @@ class OPS243Radar:
         - Peak speed averaging enabled (filters multiple reports to primary speed)
         - Max transmit power for best detection range
 
-        Direction filtering is done in software based on the sign of the speed:
-        - Positive speed = Outbound (away from radar) - recorded as shot
-        - Negative speed = Inbound (toward radar) - ignored
+        Direction filtering is done in software based on the sign of the speed.
+        Per API docs AN-010-AD (cosine error correction naming convention):
+        - Positive speed = INBOUND (toward radar) - ignored (backswing)
+        - Negative speed = OUTBOUND (away from radar) - recorded as shot
         """
         # Set units to MPH
         self.set_units(SpeedUnit.MPH)
@@ -446,10 +449,9 @@ class OPS243Radar:
         self.enable_magnitude_report(True)
 
         # Clear direction filter to get BOTH directions
-        # Direction is determined by the SIGN of the speed value:
-        # - Positive = inbound (toward radar)
-        # - Negative = outbound (away from radar)
-        # This allows us to filter inbound readings in software
+        # Direction is determined by the SIGN of the speed value.
+        # Per API docs: positive = inbound, negative = outbound
+        # This allows us to filter inbound readings (backswing) in software
         self.clear_direction_filter()
 
         # Minimum speed 10 mph to filter very slow movements
@@ -588,9 +590,11 @@ class OPS243Radar:
         """
         Parse a reading from the radar output.
 
-        Direction is determined by the SIGN of the speed value:
-        - Positive speed = Outbound (object moving away from radar)
-        - Negative speed = Inbound (object moving toward radar)
+        Direction is determined by the SIGN of the speed value.
+
+        Per API documentation AN-010-AD (cosine error correction convention):
+        - Positive speed = INBOUND (object moving toward radar)
+        - Negative speed = OUTBOUND (object moving away from radar)
 
         This requires R| (both directions) mode to be set.
 
@@ -607,13 +611,16 @@ class OPS243Radar:
                 magnitude = data.get('magnitude')
 
                 # Direction is determined by the SIGN of the speed value
-                # Based on testing with radar behind ball:
-                # - Positive speed = Outbound (ball moving away from radar)
-                # - Negative speed = Inbound (movement toward radar)
+                # Per API docs AN-010-AD cosine error correction naming:
+                # - Positive speed = INBOUND (toward radar)
+                # - Negative speed = OUTBOUND (away from radar)
                 if speed > 0:
-                    direction = Direction.OUTBOUND
-                else:
                     direction = Direction.INBOUND
+                else:
+                    direction = Direction.OUTBOUND
+
+                # Debug: print raw reading to console (sign indicates direction)
+                print(f"[RAW] {speed:+.1f} mph -> {direction.value} (mag: {magnitude})")
 
                 # Log parsed reading for debugging
                 logger.debug(f"PARSED: raw_speed={speed:.2f} abs_speed={abs(speed):.2f} dir={direction.value} mag={magnitude}")
@@ -627,11 +634,15 @@ class OPS243Radar:
                 )
 
             # Plain number format - direction from sign
+            # Per API docs: positive = inbound, negative = outbound
             speed = float(line)
             if speed > 0:
-                direction = Direction.OUTBOUND
-            else:
                 direction = Direction.INBOUND
+            else:
+                direction = Direction.OUTBOUND
+
+            # Debug: print raw reading to console
+            print(f"[RAW] {speed:+.1f} mph -> {direction.value}")
 
             logger.debug(f"PARSED (plain): raw_speed={speed:.2f} abs_speed={abs(speed):.2f} dir={direction.value}")
 

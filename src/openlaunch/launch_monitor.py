@@ -337,18 +337,12 @@ class LaunchMonitor:
 
         # Filter by realistic speeds
         if not min_speed <= reading.speed <= self.MAX_BALL_SPEED_MPH:
-            reason = f"Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}"
-            print(f"[FILTER] {reason}")
-            if logger:
-                logger.log_filtered_reading(reading, reason, filter_type="speed")
+            print(f"[FILTER] Speed {reading.speed:.1f} outside range {min_speed}-{self.MAX_BALL_SPEED_MPH}")
             return
 
         # Only accept outbound readings (ball/club moving away from radar)
         if reading.direction != Direction.OUTBOUND:
-            reason = f"Direction {reading.direction.value} is not outbound"
-            print(f"[FILTER] {reason}")
-            if logger:
-                logger.log_filtered_reading(reading, reason, filter_type="direction")
+            print(f"[FILTER] Direction {reading.direction.value} is not outbound")
             return
 
         print(f"[ACCEPTED] {reading.speed:.1f} mph {reading.direction.value} - buffered: {len(self._current_readings)}")
