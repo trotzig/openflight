@@ -16,26 +16,26 @@ class TestParseReading:
         self.radar._magnitude_enabled = True
 
     def test_parse_json_with_magnitude(self):
-        """Parse JSON output with magnitude."""
-        # Positive speed = OUTBOUND (away from radar - ball flight direction)
+        """Parse JSON output with positive speed (inbound)."""
+        # Positive speed = INBOUND (toward radar)
         line = '{"speed": 152.3, "magnitude": 1847}'
         reading = self.radar._parse_reading(line)
 
         assert reading is not None
         assert reading.speed == 152.3
         assert reading.magnitude == 1847
-        assert reading.direction == Direction.OUTBOUND
+        assert reading.direction == Direction.INBOUND
         assert reading.unit == "mph"
 
     def test_parse_json_negative_speed(self):
-        """Negative speed indicates inbound direction."""
-        # Negative speed = INBOUND (toward radar - backswing)
+        """Negative speed indicates outbound direction."""
+        # Negative speed = OUTBOUND (away from radar - ball flight)
         line = '{"speed": -45.2, "magnitude": 500}'
         reading = self.radar._parse_reading(line)
 
         assert reading is not None
         assert reading.speed == 45.2  # Absolute value
-        assert reading.direction == Direction.INBOUND
+        assert reading.direction == Direction.OUTBOUND
 
     def test_parse_json_without_magnitude(self):
         """Parse JSON without magnitude field."""
@@ -48,25 +48,25 @@ class TestParseReading:
 
     def test_parse_plain_number(self):
         """Parse plain number output (non-JSON mode)."""
-        # Positive speed = OUTBOUND (away from radar)
+        # Positive speed = INBOUND (toward radar)
         self.radar._json_mode = False
         line = "145.7"
         reading = self.radar._parse_reading(line)
 
         assert reading is not None
         assert reading.speed == 145.7
-        assert reading.direction == Direction.OUTBOUND
+        assert reading.direction == Direction.INBOUND
 
     def test_parse_plain_negative(self):
         """Parse plain negative number."""
-        # Negative speed = INBOUND (toward radar)
+        # Negative speed = OUTBOUND (away from radar - ball flight)
         self.radar._json_mode = False
         line = "-88.3"
         reading = self.radar._parse_reading(line)
 
         assert reading is not None
         assert reading.speed == 88.3
-        assert reading.direction == Direction.INBOUND
+        assert reading.direction == Direction.OUTBOUND
 
     def test_parse_invalid_json(self):
         """Invalid JSON returns None."""

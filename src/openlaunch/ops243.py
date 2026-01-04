@@ -619,7 +619,9 @@ class OPS243Radar:
             raw_logger.debug(f"RAW: {line}")
 
             return self._parse_reading(line)
-        except serial.SerialException:
+        except serial.SerialException as e:
+            if _show_raw_readings:
+                print(f"[SERIAL ERROR] {e}")
             return None
 
     def _parse_reading(self, line: str) -> Optional[SpeedReading]:
@@ -628,11 +630,9 @@ class OPS243Radar:
 
         Direction is determined by the SIGN of the speed value.
 
-        With R| (both directions) mode and R- (outbound reporting) configured:
-        - Positive speed = OUTBOUND (object moving away from radar)
-        - Negative speed = INBOUND (object moving toward radar)
-
-        This matches how OmniPreSense reports with outbound-primary configuration.
+        With R| (both directions) mode:
+        - Negative speed = OUTBOUND (away from radar - ball flight)
+        - Positive speed = INBOUND (toward radar - backswing)
 
         Args:
             line: Raw line from serial output
@@ -640,6 +640,10 @@ class OPS243Radar:
         Returns:
             SpeedReading or None if parse fails
         """
+        # Always log raw line when debugging enabled (before any parsing)
+        if _show_raw_readings:
+            print(f"[SERIAL] {line!r}")
+
         try:
             if self._json_mode and line.startswith('{'):
                 data = json.loads(line)
@@ -647,12 +651,12 @@ class OPS243Radar:
                 magnitude = data.get('magnitude')
 
                 # Direction from sign of speed value
-                # Positive = OUTBOUND (away from radar - golf ball flight)
-                # Negative = INBOUND (toward radar - backswing)
-                if speed >= 0:
-                    direction = Direction.OUTBOUND
-                else:
+                # Negative = OUTBOUND (away from radar - golf ball flight)
+                # Positive = INBOUND (toward radar - backswing)
+                if speed > 0:
                     direction = Direction.INBOUND
+                else:
+                    direction = Direction.OUTBOUND
 
                 # Debug: print raw reading to console (sign indicates direction)
                 if _show_raw_readings:
@@ -671,10 +675,10 @@ class OPS243Radar:
 
             # Plain number format - direction from sign
             speed = float(line)
-            if speed >= 0:
-                direction = Direction.OUTBOUND
-            else:
+            if speed > 0:
                 direction = Direction.INBOUND
+            else:
+                direction = Direction.OUTBOUND
 
             # Debug: print raw reading to console
             if _show_raw_readings:
