@@ -482,6 +482,11 @@ class OPS243Radar:
         # We filter higher speeds (backswing) in software based on direction
         self.set_min_speed_filter(10)
 
+        # Minimum magnitude filter to reject weak signals (walking, noise)
+        # Real golf shots have magnitude 100+, walking is typically 20-30
+        self.set_magnitude_filter(min_mag=50)
+        print("[RADAR CONFIG] Minimum magnitude filter: 50")
+
         # Max transmit power for best range
         self.set_transmit_power(0)
 
