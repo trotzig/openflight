@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSocket } from "./hooks/useSocket";
 import { ShotDisplay } from "./components/ShotDisplay";
 import { StatsView } from "./components/StatsView";
@@ -8,6 +8,13 @@ import { CameraFeed } from "./components/CameraFeed";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { ClubPicker } from "./components/ClubPicker";
 import { BallDetectionIndicator } from "./components/BallDetectionIndicator";
+import {
+  LaunchDaddyProvider,
+  useLaunchDaddy,
+  LaunchDaddyOverlay,
+  LaunchDaddyBrand,
+  LaunchDaddySecretIndicator,
+} from "./components/LaunchDaddy";
 import "./App.css";
 
 type View = "live" | "stats" | "shots" | "camera" | "debug";
@@ -56,7 +63,7 @@ const Icons = {
   ),
 };
 
-function App() {
+function AppContent() {
   const {
     connected,
     mockMode,
@@ -77,6 +84,14 @@ function App() {
   } = useSocket();
   const [currentView, setCurrentView] = useState<View>("live");
   const [selectedClub, setSelectedClub] = useState("driver");
+  const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
+
+  // Trigger explosion when a new shot is detected
+  useEffect(() => {
+    if (latestShot && isLaunchDaddyMode) {
+      triggerExplosion();
+    }
+  }, [latestShot?.timestamp, isLaunchDaddyMode, triggerExplosion]);
 
   const handleClubChange = (club: string) => {
     setSelectedClub(club);
@@ -84,8 +99,30 @@ function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
+      {/* Launch Daddy Overlay */}
+      <LaunchDaddyOverlay />
+      <LaunchDaddySecretIndicator />
+
       <header className="header">
+        {/* Secret activation area - click/tap 5 times quickly */}
+        <div
+          className="header__secret-tap"
+          onClick={handleSecretTap}
+          onKeyDown={(e) => e.key === 'Enter' && handleSecretTap()}
+          role="button"
+          tabIndex={0}
+          style={{
+            padding: '8px',
+            cursor: 'pointer',
+            minWidth: '44px',
+            minHeight: '44px',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <span style={{ opacity: 0.3, fontSize: '1.2rem' }}>⛳</span>}
+        </div>
         <div className="header__controls">
           <ClubPicker
             selectedClub={selectedClub}
@@ -198,6 +235,14 @@ function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <LaunchDaddyProvider>
+      <AppContent />
+    </LaunchDaddyProvider>
   );
 }
 
