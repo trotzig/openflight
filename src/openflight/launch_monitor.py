@@ -148,6 +148,9 @@ class Shot:
         launch_angle_vertical: Vertical launch angle in degrees (from camera)
         launch_angle_horizontal: Horizontal launch angle in degrees (from camera)
         launch_angle_confidence: Confidence in launch angle measurement (0-1)
+        spin_rpm: Spin rate in RPM (from rolling buffer mode)
+        spin_confidence: Confidence in spin measurement (0-1)
+        carry_spin_adjusted: Carry distance adjusted for spin (yards)
     """
     ball_speed_mph: float
     timestamp: datetime
@@ -158,6 +161,9 @@ class Shot:
     launch_angle_vertical: Optional[float] = None
     launch_angle_horizontal: Optional[float] = None
     launch_angle_confidence: Optional[float] = None
+    spin_rpm: Optional[float] = None
+    spin_confidence: Optional[float] = None
+    carry_spin_adjusted: Optional[float] = None
 
     @property
     def ball_speed_ms(self) -> float:
@@ -219,6 +225,27 @@ class Shot:
     def has_launch_angle(self) -> bool:
         """Check if launch angle data is available for this shot."""
         return self.launch_angle_vertical is not None
+
+    @property
+    def has_spin(self) -> bool:
+        """Check if spin data is available for this shot."""
+        return self.spin_rpm is not None
+
+    @property
+    def spin_quality(self) -> Optional[str]:
+        """
+        Get spin measurement quality as a string.
+
+        Returns:
+            "high", "medium", "low", or None if no spin data
+        """
+        if self.spin_confidence is None:
+            return None
+        if self.spin_confidence >= 0.7:
+            return "high"
+        if self.spin_confidence >= 0.4:
+            return "medium"
+        return "low"
 
 
 class LaunchMonitor:

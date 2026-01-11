@@ -83,12 +83,14 @@ function MetricCard({
   label,
   subtext,
   variant = 'default',
+  confidence,
 }: {
   value: string | number;
   unit?: string;
   label: string;
   subtext?: string;
-  variant?: 'default' | 'primary' | 'secondary';
+  variant?: 'default' | 'primary' | 'secondary' | 'spin';
+  confidence?: 'high' | 'medium' | 'low' | null;
 }) {
   return (
     <div className={`metric-card metric-card--${variant}`}>
@@ -98,6 +100,16 @@ function MetricCard({
       </div>
       <span className="metric-card__label">{label}</span>
       {subtext && <span className="metric-card__subtext">{subtext}</span>}
+      {confidence && (
+        <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
+          <span className="metric-card__confidence-dots">
+            <span className="dot filled" />
+            <span className={`dot ${confidence === 'medium' || confidence === 'high' ? 'filled' : ''}`} />
+            <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
+          </span>
+          <span className="metric-card__confidence-label">{confidence}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -107,6 +119,30 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
     if (!shot) return null;
     return `${shot.carry_range[0]}–${shot.carry_range[1]} yds`;
   }, [shot]);
+
+  // Use spin-adjusted carry when available
+  const displayCarry = useMemo(() => {
+    if (!shot) return 0;
+    return shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  }, [shot]);
+
+  const carryLabel = useMemo(() => {
+    if (!shot) return 'Est. Carry';
+    return shot.carry_spin_adjusted ? 'Est. Carry' : 'Est. Carry';
+  }, [shot]);
+
+  const carrySubtext = useMemo(() => {
+    if (!shot) return undefined;
+    if (shot.carry_spin_adjusted) {
+      return 'spin-adjusted';
+    }
+    return carryRange || undefined;
+  }, [shot, carryRange]);
+
+  // Format spin RPM with thousands separator
+  const formatSpinRpm = (rpm: number): string => {
+    return rpm.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  };
 
   if (!shot) {
     return (
@@ -127,6 +163,8 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
     );
   }
 
+  const hasSpin = shot.spin_rpm !== null;
+
   return (
     <div className={`shot-display ${isLatest ? 'shot-display--latest' : ''}`}>
       <div className="shot-display__layout">
@@ -138,18 +176,28 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
         {/* Right: Secondary Metrics */}
         <div className="shot-display__metrics">
           <MetricCard
-            value={shot.estimated_carry_yards}
+            value={Math.round(displayCarry)}
             unit="yds"
-            label="Est. Carry"
-            subtext={carryRange || undefined}
+            label={carryLabel}
+            subtext={carrySubtext}
             variant="primary"
           />
-          <MetricCard
-            value={shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '—'}
-            unit={shot.club_speed_mph ? 'mph' : undefined}
-            label="Club Speed"
-            variant="secondary"
-          />
+          {hasSpin ? (
+            <MetricCard
+              value={formatSpinRpm(shot.spin_rpm!)}
+              unit="rpm"
+              label="Spin Rate"
+              variant="spin"
+              confidence={shot.spin_quality}
+            />
+          ) : (
+            <MetricCard
+              value={shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '—'}
+              unit={shot.club_speed_mph ? 'mph' : undefined}
+              label="Club Speed"
+              variant="secondary"
+            />
+          )}
           <MetricCard
             value={shot.smash_factor ? shot.smash_factor.toFixed(2) : '—'}
             label="Smash Factor"

@@ -812,6 +812,137 @@ class OPS243Radar:
         self._send_command("AX")
         time.sleep(1)
 
+    # =========================================================================
+    # Rolling Buffer Mode (G1)
+    # =========================================================================
+
+    def enable_rolling_buffer(self):
+        """
+        Enable rolling buffer mode for raw I/Q capture.
+
+        Rolling buffer mode (G1) captures 4096 raw I/Q samples instead of
+        processing them internally. This allows post-capture FFT processing
+        with overlapping windows for higher temporal resolution and spin detection.
+
+        Commands:
+        - PI: Idle mode first (required before G1)
+        - K+: Enable peak detection
+        - G1: Enable rolling buffer (4096 samples)
+
+        After enabling, use trigger_capture() to dump the buffer.
+        """
+        print("[RADAR] Enabling rolling buffer mode...")
+        self._send_command("PI")  # Idle first
+        time.sleep(0.1)
+        self._send_command("K+")  # Peak detection
+        time.sleep(0.1)
+        self._send_command("G1")  # Enable rolling buffer
+        time.sleep(0.1)
+        print("[RADAR] Rolling buffer mode enabled (G1)")
+
+    def disable_rolling_buffer(self):
+        """
+        Disable rolling buffer mode and return to normal streaming.
+
+        After disabling, call configure_for_golf() to restore streaming settings.
+        """
+        print("[RADAR] Disabling rolling buffer mode...")
+        self._send_command("PI")  # Idle
+        time.sleep(0.1)
+        print("[RADAR] Rolling buffer mode disabled")
+
+    def set_trigger_split(self, segments: int = 8):
+        """
+        Set the pre/post trigger data split for rolling buffer.
+
+        The S#n command controls how much historical data is included:
+        - n=0: Only new samples (0% pre-trigger)
+        - n=8: Default (25% pre-trigger = 1024 samples)
+        - n=32: All current samples (100% pre-trigger)
+
+        Each segment = 128 samples. At 30ksps:
+        - 8 segments = 1024 samples = ~34ms pre-trigger
+
+        Args:
+            segments: Number of pre-trigger segments (0-32)
+        """
+        segments = max(0, min(32, segments))
+        self._send_command(f"S#{segments}")
+        print(f"[RADAR] Trigger split set to {segments} segments")
+
+    def trigger_capture(self, timeout: float = 2.0) -> str:
+        """
+        Trigger buffer capture and return raw I/Q data.
+
+        Sends S! command to dump the rolling buffer contents.
+        The response contains:
+        - {"sample_time": "xxx.xxx"}
+        - {"trigger_time": "xxx.xxx"}
+        - {"I": [4096 integers...]}
+        - {"Q": [4096 integers...]}
+
+        Args:
+            timeout: Maximum time to wait for response
+
+        Returns:
+            Raw response string containing JSON lines
+        """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
+        # Clear input buffer
+        self.serial.reset_input_buffer()
+
+        # Send trigger command
+        self.serial.write(b"S!")
+
+        # Wait and collect response (large data transfer)
+        time.sleep(0.2)
+
+        response_lines = []
+        start_time = time.time()
+
+        while (time.time() - start_time) < timeout:
+            if self.serial.in_waiting:
+                chunk = self.serial.read(self.serial.in_waiting)
+                response_lines.append(chunk.decode('ascii', errors='ignore'))
+                time.sleep(0.05)
+            else:
+                # Check if we have complete data
+                full_response = ''.join(response_lines)
+                if '"Q"' in full_response and full_response.rstrip().endswith(']'):
+                    break
+                time.sleep(0.05)
+
+        return ''.join(response_lines)
+
+    def configure_for_rolling_buffer(self):
+        """
+        Configure radar optimally for rolling buffer mode.
+
+        Similar to configure_for_golf() but sets up for G1 mode:
+        - 30ksps sample rate
+        - Rolling buffer enabled
+        - Trigger split for ~34ms pre-trigger data
+        """
+        # Set units to MPH
+        self.set_units(SpeedUnit.MPH)
+
+        # 30ksps sample rate
+        self.set_sample_rate(30000)
+        print("[RADAR CONFIG] Sample rate: 30ksps")
+
+        # Max transmit power
+        self.set_transmit_power(0)
+
+        # Enable rolling buffer
+        self.enable_rolling_buffer()
+
+        # Set trigger split (8 segments = ~34ms pre-trigger)
+        self.set_trigger_split(8)
+
+        print("[RADAR CONFIG] Rolling buffer mode configured")
+
     def __enter__(self):
         """Context manager entry."""
         self.connect()

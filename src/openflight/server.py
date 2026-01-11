@@ -85,6 +85,11 @@ def shot_to_dict(shot: Shot) -> dict:
         "launch_angle_vertical": shot.launch_angle_vertical,
         "launch_angle_horizontal": shot.launch_angle_horizontal,
         "launch_angle_confidence": shot.launch_angle_confidence,
+        # Spin data from rolling buffer mode
+        "spin_rpm": round(shot.spin_rpm) if shot.spin_rpm else None,
+        "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
+        "spin_quality": shot.spin_quality,
+        "carry_spin_adjusted": round(shot.carry_spin_adjusted) if shot.carry_spin_adjusted else None,
     }
 
 
@@ -640,16 +645,36 @@ def on_shot_detected(shot: Shot):
         print(f"[WARN] Debug logging error: {e}")
 
 
-def start_monitor(port: Optional[str] = None, mock: bool = False):
-    """Start the launch monitor."""
+def start_monitor(
+    port: Optional[str] = None,
+    mock: bool = False,
+    mode: str = "streaming",
+    trigger_type: str = "polling",
+):
+    """
+    Start the launch monitor.
+
+    Args:
+        port: Serial port for radar
+        mock: Run in mock mode without radar
+        mode: "streaming" (default) or "rolling-buffer"
+        trigger_type: Trigger strategy for rolling-buffer mode
+    """
     global monitor, mock_mode  # pylint: disable=global-statement
 
     mock_mode = mock
     if mock:
         # Mock mode for testing without radar
         monitor = MockLaunchMonitor()
+    elif mode == "rolling-buffer":
+        # Rolling buffer mode for spin detection
+        from .rolling_buffer import RollingBufferMonitor
+        monitor = RollingBufferMonitor(port=port, trigger_type=trigger_type)
+        print(f"[MODE] Rolling buffer mode enabled (trigger: {trigger_type})")
     else:
+        # Default streaming mode
         monitor = LaunchMonitor(port=port)
+        print("[MODE] Streaming mode enabled")
 
     monitor.connect()
 
@@ -849,6 +874,18 @@ def main():
         "--no-logging", action="store_true",
         help="Disable session logging"
     )
+    parser.add_argument(
+        "--mode", "-M",
+        choices=["streaming", "rolling-buffer"],
+        default="streaming",
+        help="Radar mode: streaming (default, real-time) or rolling-buffer (higher resolution, spin detection)"
+    )
+    parser.add_argument(
+        "--trigger",
+        choices=["polling", "threshold"],
+        default="polling",
+        help="Trigger strategy for rolling-buffer mode (default: polling)"
+    )
     args = parser.parse_args()
 
     print("=" * 50)
@@ -889,7 +926,12 @@ def main():
         print("Raw radar readings display ENABLED - signed speed values will be shown")
 
     # Start the monitor
-    start_monitor(port=args.port, mock=args.mock)
+    start_monitor(
+        port=args.port,
+        mock=args.mock,
+        mode=args.mode,
+        trigger_type=args.trigger,
+    )
 
     if args.mock:
         print("Running in MOCK mode - no radar required")

@@ -7,6 +7,11 @@ export interface Shot {
   club: string;
   timestamp: string;
   peak_magnitude: number | null;
+  // Rolling buffer mode spin data
+  spin_rpm: number | null;
+  spin_confidence: number | null;
+  spin_quality: 'high' | 'medium' | 'low' | null;
+  carry_spin_adjusted: number | null;
 }
 
 export interface SessionStats {
@@ -18,6 +23,10 @@ export interface SessionStats {
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
   avg_carry_est: number;
+  // Rolling buffer mode spin stats
+  avg_spin_rpm?: number | null;
+  spin_detection_rate?: number;
+  mode?: 'streaming' | 'rolling-buffer';
 }
 
 export interface SessionState {
