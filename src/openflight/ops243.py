@@ -898,8 +898,6 @@ class OPS243Radar:
         # Clear input buffer
         self.serial.reset_input_buffer()
 
-        print("[RADAR] Sending S! trigger...")
-
         # Send trigger command
         self.serial.write(b"S!\r")
         self.serial.flush()
@@ -924,7 +922,6 @@ class OPS243Radar:
                     q_idx = full_response.rfind('"Q"')
                     remaining = full_response[q_idx:]
                     if ']}' in remaining or (remaining.rstrip().endswith(']') and remaining.count('[') == remaining.count(']')):
-                        print(f"[RADAR] Complete response received: {bytes_received} bytes")
                         break
 
                 time.sleep(0.01)  # Short sleep to accumulate data
@@ -934,21 +931,17 @@ class OPS243Radar:
                 if bytes_received > 100 and (time.time() - last_data_time) > 0.5:
                     full_response = ''.join(response_lines)
                     if '"Q"' in full_response:
-                        print(f"[RADAR] Response complete (no more data): {bytes_received} bytes")
                         break
                 time.sleep(0.02)
 
         full_response = ''.join(response_lines)
-        elapsed = time.time() - start_time
 
+        # Only log issues, not normal operation
         if not full_response:
             print("[RADAR] S! returned empty response")
         elif len(full_response) < 1000:
-            # Show hex representation for short responses to see control characters
-            hex_repr = ' '.join(f'{ord(c):02x}' for c in full_response[:50])
-            print(f"[RADAR] S! response too short ({len(full_response)} bytes, {elapsed:.1f}s): {repr(full_response[:200])} hex: {hex_repr}")
-        else:
-            print(f"[RADAR] S! received {len(full_response)} bytes in {elapsed:.1f}s")
+            # Short response usually means mode not configured correctly
+            print(f"[RADAR] S! response too short ({len(full_response)} bytes): {repr(full_response[:100])}")
 
         return full_response
 
@@ -961,7 +954,6 @@ class OPS243Radar:
         """
         self._send_command("PA")
         time.sleep(0.05)
-        print("[RADAR] Rolling buffer re-armed")
 
     def configure_for_rolling_buffer(self):
         """

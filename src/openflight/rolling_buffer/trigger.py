@@ -66,15 +66,18 @@ class PollingTrigger(TriggerStrategy):
         self,
         poll_interval: float = 0.5,
         min_readings: int = 3,
-        min_speed_mph: float = 30,
+        min_speed_mph: float = 50,
     ):
         """
         Initialize polling trigger.
 
         Args:
             poll_interval: Seconds between poll attempts
-            min_readings: Minimum readings to consider valid
-            min_speed_mph: Minimum speed to consider activity
+            min_readings: Minimum readings to consider valid (outbound, above min_speed)
+            min_speed_mph: Minimum speed to consider a golf shot (default 50 mph)
+                          - Slow chip shots: 40-60 mph ball speed
+                          - Full iron shots: 80-140 mph ball speed
+                          - Driver shots: 130-180 mph ball speed
         """
         self.poll_interval = poll_interval
         self.min_readings = min_readings
@@ -110,8 +113,11 @@ class PollingTrigger(TriggerStrategy):
                 # Debug: show timeline stats
                 if timeline.readings:
                     speeds = [r.speed_mph for r in timeline.readings]
+                    outbound_speeds = [r.speed_mph for r in timeline.readings if r.is_outbound]
+                    peak_outbound = max(outbound_speeds) if outbound_speeds else 0
                     print(f"[DEBUG] Timeline: {len(timeline.readings)} readings, "
-                          f"speeds {min(speeds):.1f}-{max(speeds):.1f} mph")
+                          f"speeds {min(speeds):.1f}-{max(speeds):.1f} mph, "
+                          f"peak outbound: {peak_outbound:.1f} mph (need >={self.min_speed_mph})")
                 else:
                     print("[DEBUG] Timeline: 0 readings (no signal detected)")
 
@@ -120,8 +126,10 @@ class PollingTrigger(TriggerStrategy):
                             if r.is_outbound and r.speed_mph >= self.min_speed_mph]
 
                 if len(outbound) >= self.min_readings:
-                    logger.info(f"Activity detected: {len(outbound)} readings, "
-                               f"peak {max(r.speed_mph for r in outbound):.1f} mph")
+                    peak = max(r.speed_mph for r in outbound)
+                    print(f"[SHOT DETECTED] {len(outbound)} readings >= {self.min_speed_mph} mph, "
+                          f"peak {peak:.1f} mph")
+                    logger.info(f"Activity detected: {len(outbound)} readings, peak {peak:.1f} mph")
                     return capture
 
                 time.sleep(self.poll_interval)

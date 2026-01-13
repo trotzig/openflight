@@ -88,10 +88,6 @@ class RollingBufferProcessor:
             i_samples = None
             q_samples = None
 
-            # Debug: show first part of response to understand format
-            if len(response) > 1000:
-                print(f"[DEBUG] Large response ({len(response)} bytes), first 500 chars: {response[:500]}")
-
             for line in response.strip().split('\n'):
                 line = line.strip()
                 if not line or not line.startswith('{'):
@@ -99,11 +95,6 @@ class RollingBufferProcessor:
 
                 try:
                     data = json.loads(line)
-                    # Debug: show keys found in each JSON object
-                    if len(response) > 1000:
-                        keys = list(data.keys())
-                        if keys and keys[0] not in ['I', 'Q']:  # Don't spam for I/Q arrays
-                            print(f"[DEBUG] Found JSON keys: {keys}")
 
                     if "sample_time" in data:
                         sample_time = float(data["sample_time"])
@@ -114,14 +105,10 @@ class RollingBufferProcessor:
                     elif "Q" in data:
                         q_samples = data["Q"]
 
-                except json.JSONDecodeError as e:
-                    if len(response) > 1000:
-                        print(f"[DEBUG] JSON decode error on line: {line[:100]}... Error: {e}")
+                except json.JSONDecodeError:
                     continue
 
             if all(v is not None for v in [sample_time, trigger_time, i_samples, q_samples]):
-                print(f"[DEBUG] Parse SUCCESS: sample_time={sample_time}, trigger_time={trigger_time}, "
-                      f"I samples={len(i_samples)}, Q samples={len(q_samples)}")
                 return IQCapture(
                     sample_time=sample_time,
                     trigger_time=trigger_time,
@@ -236,7 +223,6 @@ class RollingBufferProcessor:
 
         num_blocks = len(i_data) // self.STEP_SIZE_STANDARD
         readings = []
-        max_magnitude_seen = 0
 
         for block_idx in range(num_blocks):
             start = block_idx * self.STEP_SIZE_STANDARD
@@ -249,7 +235,6 @@ class RollingBufferProcessor:
             q_block = q_data[start:end]
 
             speed_mph, magnitude, direction = self._process_block(i_block, q_block)
-            max_magnitude_seen = max(max_magnitude_seen, magnitude)
 
             # Calculate timestamp relative to capture start
             timestamp_ms = (start / self.SAMPLE_RATE) * 1000
@@ -262,9 +247,6 @@ class RollingBufferProcessor:
                     direction=direction,
                 ))
 
-        # Debug: show max magnitude seen vs threshold
-        if not readings:
-            print(f"[DEBUG] FFT: max magnitude={max_magnitude_seen:.1f}, threshold={self.MAGNITUDE_THRESHOLD} - no readings passed")
 
         sample_rate_hz = self.SAMPLE_RATE / self.STEP_SIZE_STANDARD
 
