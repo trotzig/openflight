@@ -308,14 +308,20 @@ class RollingBufferMonitor:
                 processed = self.processor.process_capture(capture)
 
                 if processed is None:
+                    print("[DEBUG] process_capture returned None")
                     logger.warning("Failed to process capture")
                     continue
+
+                print(f"[DEBUG] Processed: ball_speed={processed.ball_speed_mph:.1f} mph, "
+                      f"club_speed={processed.club_speed_mph}")
 
                 # Create shot
                 shot = self._create_shot(processed)
 
                 if shot:
                     self._shots.append(shot)
+                    print(f"[SHOT CREATED] {shot.ball_speed_mph:.1f} mph ball, "
+                          f"club: {shot.club_speed_mph}, spin: {shot.spin_rpm}")
                     logger.info(
                         f"Shot detected: {shot.ball_speed_mph:.1f} mph, "
                         f"spin: {shot.spin_rpm if shot.spin_rpm else 'N/A'}"
@@ -323,6 +329,8 @@ class RollingBufferMonitor:
 
                     if self._shot_callback:
                         self._shot_callback(shot)
+                else:
+                    print("[DEBUG] _create_shot returned None")
 
                 # Reset trigger for next capture
                 self.trigger.reset()
@@ -341,9 +349,9 @@ class RollingBufferMonitor:
         Returns:
             Shot object or None if invalid
         """
-        # Validate ball speed
-        if processed.ball_speed_mph < 30:
-            logger.debug(f"Ball speed too low: {processed.ball_speed_mph:.1f} mph")
+        # Validate ball speed (lowered for testing - real shots are 80+ mph)
+        if processed.ball_speed_mph < 20:
+            print(f"[DEBUG] Ball speed too low: {processed.ball_speed_mph:.1f} mph (need >=20)")
             return None
 
         # Calculate carry distance
