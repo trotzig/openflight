@@ -66,7 +66,7 @@ class PollingTrigger(TriggerStrategy):
         self,
         poll_interval: float = 0.5,
         min_readings: int = 3,
-        min_speed_mph: float = 50,
+        min_speed_mph: float = 25,
     ):
         """
         Initialize polling trigger.
@@ -74,10 +74,7 @@ class PollingTrigger(TriggerStrategy):
         Args:
             poll_interval: Seconds between poll attempts
             min_readings: Minimum readings to consider valid (outbound, above min_speed)
-            min_speed_mph: Minimum speed to consider a golf shot (default 50 mph)
-                          - Slow chip shots: 40-60 mph ball speed
-                          - Full iron shots: 80-140 mph ball speed
-                          - Driver shots: 130-180 mph ball speed
+            min_speed_mph: Minimum speed to consider a golf shot (default 25 mph)
         """
         self.poll_interval = poll_interval
         self.min_readings = min_readings
