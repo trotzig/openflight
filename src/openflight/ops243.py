@@ -825,9 +825,9 @@ class OPS243Radar:
         with overlapping windows for higher temporal resolution and spin detection.
 
         Commands:
-        - PI: Idle mode first (required before G1)
+        - PI: Idle mode first (required before GC)
         - K+: Enable peak detection
-        - G1: Enable rolling buffer (4096 samples)
+        - GC: Enable rolling buffer (4096 samples) - replaced G1 in newer firmware
 
         After enabling, use trigger_capture() to dump the buffer.
         """
@@ -836,10 +836,10 @@ class OPS243Radar:
         time.sleep(0.1)
         self._send_command("K+")  # Peak detection
         time.sleep(0.1)
-        response = self._send_command("G1")  # Enable rolling buffer
+        response = self._send_command("GC")  # Enable rolling buffer (GC replaced G1)
         time.sleep(0.1)
-        print(f"[RADAR] G1 response: {response if response else '(none)'}")
-        print("[RADAR] Rolling buffer mode enabled (G1)")
+        print(f"[RADAR] GC response: {response if response else '(none)'}")
+        print("[RADAR] Rolling buffer mode enabled (GC)")
 
     def disable_rolling_buffer(self):
         """
@@ -848,9 +848,9 @@ class OPS243Radar:
         After disabling, call configure_for_golf() to restore streaming settings.
         """
         print("[RADAR] Disabling rolling buffer mode...")
-        self._send_command("PI")  # Idle
+        self._send_command("GS")  # Return to standard CW mode
         time.sleep(0.1)
-        print("[RADAR] Rolling buffer mode disabled")
+        print("[RADAR] Rolling buffer mode disabled (returned to CW mode)")
 
     def set_trigger_split(self, segments: int = 8):
         """
