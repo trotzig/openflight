@@ -127,7 +127,8 @@ class RollingBufferProcessor:
             if q_samples is None:
                 missing.append("Q")
             logger.warning(f"Incomplete capture data in response (missing: {', '.join(missing)})")
-            logger.debug(f"Raw response preview: {response[:500] if response else '(empty)'}")
+            # Always show preview when parsing fails to debug format issues
+            print(f"[DEBUG] Response preview (first 800 chars): {response[:800] if response else '(empty)'}")
             return None
 
         except Exception as e:
