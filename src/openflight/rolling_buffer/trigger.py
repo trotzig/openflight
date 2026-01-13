@@ -107,6 +107,14 @@ class PollingTrigger(TriggerStrategy):
                 # Quick check for activity using standard processing
                 timeline = processor.process_standard(capture)
 
+                # Debug: show timeline stats
+                if timeline.readings:
+                    speeds = [r.speed_mph for r in timeline.readings]
+                    print(f"[DEBUG] Timeline: {len(timeline.readings)} readings, "
+                          f"speeds {min(speeds):.1f}-{max(speeds):.1f} mph")
+                else:
+                    print("[DEBUG] Timeline: 0 readings (no signal detected)")
+
                 # Check for significant activity
                 outbound = [r for r in timeline.readings
                             if r.is_outbound and r.speed_mph >= self.min_speed_mph]
