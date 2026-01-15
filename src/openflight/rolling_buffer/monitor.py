@@ -14,6 +14,7 @@ from typing import Callable, List, Optional
 
 from ..ops243 import OPS243Radar, SpeedReading, Direction
 from ..launch_monitor import Shot, ClubType, estimate_carry_distance
+from ..session_logger import get_session_logger
 from .types import IQCapture, ProcessedCapture
 from .processor import RollingBufferProcessor
 from .trigger import TriggerStrategy, create_trigger
@@ -326,6 +327,23 @@ class RollingBufferMonitor:
                         f"Shot detected: {shot.ball_speed_mph:.1f} mph, "
                         f"spin: {shot.spin_rpm if shot.spin_rpm else 'N/A'}"
                     )
+
+                    # Log to session logger
+                    session_logger = get_session_logger()
+                    if session_logger:
+                        session_logger.log_shot(
+                            ball_speed_mph=shot.ball_speed_mph,
+                            club_speed_mph=shot.club_speed_mph,
+                            smash_factor=shot.smash_factor,
+                            estimated_carry_yards=shot.estimated_carry_yards,
+                            club=self._current_club.value,
+                            peak_magnitude=None,  # Not available in rolling buffer mode
+                            readings_count=len(processed.timeline.readings),
+                            readings=None,  # Raw readings not stored in rolling buffer mode
+                            spin_rpm=shot.spin_rpm,
+                            spin_confidence=shot.spin_confidence,
+                            mode="rolling-buffer"
+                        )
 
                     if self._shot_callback:
                         self._shot_callback(shot)

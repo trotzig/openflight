@@ -26,6 +26,8 @@ class SessionMetadata:
     camera_enabled: bool
     camera_model: Optional[str]
     config: Dict[str, Any]
+    mode: str  # "streaming" or "rolling-buffer"
+    trigger_type: Optional[str]  # For rolling-buffer mode: "polling", "threshold", etc.
 
 
 class SessionLogger:
@@ -89,7 +91,9 @@ class SessionLogger:
         firmware_version: Optional[str] = None,
         camera_enabled: bool = False,
         camera_model: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        mode: str = "streaming",
+        trigger_type: Optional[str] = None
     ) -> str:
         """
         Start a new logging session.
@@ -100,6 +104,8 @@ class SessionLogger:
             camera_enabled: Whether camera is enabled
             camera_model: Camera/YOLO model being used
             config: Current radar configuration
+            mode: Radar mode ("streaming" or "rolling-buffer")
+            trigger_type: Trigger strategy for rolling-buffer mode
 
         Returns:
             Session ID
@@ -139,12 +145,15 @@ class SessionLogger:
             firmware_version=firmware_version,
             camera_enabled=camera_enabled,
             camera_model=camera_model,
-            config=config or {}
+            config=config or {},
+            mode=mode,
+            trigger_type=trigger_type
         )
 
         self._write_entry("session_start", asdict(metadata))
 
         print(f"[SESSION] Started logging: {self._session_path}")
+        print(f"[SESSION] Mode: {mode}" + (f" (trigger: {trigger_type})" if trigger_type else ""))
         print(f"[SESSION] Raw radar log: {self._raw_path}")
 
         return self._session_id
@@ -246,7 +255,10 @@ class SessionLogger:
         club: str,
         peak_magnitude: Optional[float],
         readings_count: int,
-        readings: Optional[List[Dict]] = None
+        readings: Optional[List[Dict]] = None,
+        spin_rpm: Optional[float] = None,
+        spin_confidence: Optional[float] = None,
+        mode: str = "streaming"
     ):
         """
         Log a detected shot with all metrics.
@@ -260,6 +272,9 @@ class SessionLogger:
             peak_magnitude: Peak radar magnitude
             readings_count: Number of readings in the shot window
             readings: Optional list of individual readings that comprised the shot
+            spin_rpm: Spin rate in RPM (rolling buffer mode only)
+            spin_confidence: Confidence of spin detection (rolling buffer mode only)
+            mode: Radar mode ("streaming" or "rolling-buffer")
         """
         if not self.enabled:
             return
@@ -276,6 +291,9 @@ class SessionLogger:
             "peak_magnitude": peak_magnitude,
             "readings_count": readings_count,
             "readings": readings,
+            "spin_rpm": spin_rpm,
+            "spin_confidence": spin_confidence,
+            "mode": mode,
         })
 
     def log_camera_data(

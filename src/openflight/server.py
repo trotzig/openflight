@@ -687,7 +687,9 @@ def start_monitor(
             firmware_version=radar_info.get("Version"),
             camera_enabled=camera is not None,
             camera_model=camera_tracker.model_path if camera_tracker else None,
-            config=radar_config.copy()
+            config=radar_config.copy(),
+            mode=mode,
+            trigger_type=trigger_type if mode == "rolling-buffer" else None
         )
 
     monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
