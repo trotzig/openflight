@@ -950,9 +950,9 @@ class OPS243Radar:
         Re-arm rolling buffer for next capture.
 
         After trigger_capture() outputs data, the sensor pauses in Idle mode.
-        This command restarts active sampling for the next capture.
+        Per OmniPreSense reference code, send G1/GC again to restart sampling.
         """
-        self._send_command("PA")
+        self._send_command("GC")  # Re-enable rolling buffer mode
         time.sleep(0.05)
 
     def configure_for_rolling_buffer(self):
@@ -966,6 +966,11 @@ class OPS243Radar:
 
         Note: Sample rate must be set AFTER enabling rolling buffer mode
         as the GC command may reset to default 10ksps.
+
+        Based on OmniPreSense reference implementation:
+        1. PI - deactivate to reset state
+        2. GC - enable rolling buffer mode
+        3. S=30 - set sample rate (30ksps for golf)
         """
         # Set units to MPH first
         self.set_units(SpeedUnit.MPH)
@@ -975,7 +980,12 @@ class OPS243Radar:
         self.set_transmit_power(0)
         print("[RADAR CONFIG] Transmit power: max")
 
-        # Enable rolling buffer mode first
+        # Per OmniPreSense reference: deactivate first to reset state
+        self._send_command("PI")
+        time.sleep(0.1)
+        print("[RADAR CONFIG] Deactivated (PI) to reset state")
+
+        # Enable rolling buffer mode
         self.enable_rolling_buffer()
 
         # IMPORTANT: Set sample rate AFTER enabling rolling buffer
@@ -984,9 +994,20 @@ class OPS243Radar:
         time.sleep(0.1)
         print("[RADAR CONFIG] Sample rate set to 30ksps")
 
-        # Verify sample rate was set
+        # Verify sample rate was set correctly
         response = self._send_command("S?")
         print(f"[RADAR CONFIG] Sample rate check: {response}")
+
+        # Parse and warn if not 30ksps
+        try:
+            if response:
+                import json
+                data = json.loads(response)
+                rate = data.get("SampleRate", data.get("Sampling Rate", 0))
+                if rate and rate != 30000:
+                    print(f"[RADAR WARNING] Sample rate is {rate}, expected 30000!")
+        except (json.JSONDecodeError, ValueError):
+            pass
 
         # Set trigger split (8 segments = ~34ms pre-trigger)
         self.set_trigger_split(8)
