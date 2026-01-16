@@ -1001,7 +1001,6 @@ class OPS243Radar:
         # Parse and warn if not 30ksps
         try:
             if response:
-                import json
                 data = json.loads(response)
                 rate = data.get("SampleRate", data.get("Sampling Rate", 0))
                 if rate and rate != 30000:

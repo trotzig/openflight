@@ -178,14 +178,15 @@ class RollingBufferProcessor:
         fft_result = np.fft.fft(complex_signal, self.FFT_SIZE)
         magnitude = np.abs(fft_result)
 
-        # Find peak in positive frequencies (outbound) and negative (inbound)
+        # Find peak in positive frequencies and negative frequencies
         half = self.FFT_SIZE // 2
 
-        # Positive frequencies (bins 1 to half-1) = outbound (away from radar)
+        # Per OmniPreSense convention (consistent with streaming mode):
+        # - Positive frequencies (bins 1 to half-1) = INBOUND (toward radar, e.g., backswing)
+        # - Negative frequencies (bins half+1 to end) = OUTBOUND (away from radar, e.g., ball flight)
         pos_peak_bin = np.argmax(magnitude[1:half]) + 1
         pos_peak_mag = magnitude[pos_peak_bin]
 
-        # Negative frequencies (bins half+1 to end) = inbound (toward radar)
         neg_peak_bin = np.argmax(magnitude[half + 1:]) + half + 1
         neg_peak_mag = magnitude[neg_peak_bin]
 
@@ -193,11 +194,11 @@ class RollingBufferProcessor:
         if pos_peak_mag >= neg_peak_mag:
             peak_bin = pos_peak_bin
             peak_mag = pos_peak_mag
-            direction = "outbound"
+            direction = "inbound"  # Positive frequency = toward radar
         else:
             peak_bin = neg_peak_bin - self.FFT_SIZE  # Convert to negative bin
             peak_mag = neg_peak_mag
-            direction = "inbound"
+            direction = "outbound"  # Negative frequency = away from radar
 
         # Convert bin to speed
         # Frequency = bin * sample_rate / fft_size
