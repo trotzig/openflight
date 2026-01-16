@@ -45,11 +45,10 @@ def analyze_capture(response: str):
         return
 
     print(f"\n=== I/Q Data Stats ===")
-    print(f"I samples: {len(i_samples)}, range: {i_samples.min()}-{i_samples.max()}, mean: {i_samples.mean():.1f}")
-    print(f"Q samples: {len(q_samples)}, range: {q_samples.min()}-{q_samples.max()}, mean: {q_samples.mean():.1f}")
+    print(f"I samples: {len(i_samples)}, range: {i_samples.min()}-{i_samples.max()}, mean: {i_samples.mean():.1f}, std: {np.std(i_samples):.1f}")
+    print(f"Q samples: {len(q_samples)}, range: {q_samples.min()}-{q_samples.max()}, mean: {q_samples.mean():.1f}, std: {np.std(q_samples):.1f}")
 
-    # Method 1: Full 4096-sample FFT (no windowing)
-    print(f"\n=== Full 4096-sample FFT ===")
+    # Full 4096-sample FFT
     i_centered = i_samples - np.mean(i_samples)
     q_centered = q_samples - np.mean(q_samples)
     complex_signal = i_centered + 1j * q_centered
@@ -57,26 +56,70 @@ def analyze_capture(response: str):
     fft_result = np.fft.fft(complex_signal)
     magnitude = np.abs(fft_result)
 
-    # Find top 5 peaks in positive frequencies (bins 1 to 2047)
     half = FFT_SIZE // 2
-    pos_mags = magnitude[1:half]
-    pos_top_indices = np.argsort(pos_mags)[-5:][::-1] + 1
 
-    print("Top 5 POSITIVE freq peaks (inbound/toward radar):")
+    # Skip DC region (bins 0-50 = 0-5 mph) to avoid low-freq noise
+    DC_SKIP = 50  # Skip first 50 bins (~5 mph)
+
+    print(f"\n=== FFT Peaks (skipping DC, bins < {DC_SKIP}) ===")
+
+    # Find peaks in positive frequencies ABOVE DC region
+    pos_mags = magnitude[DC_SKIP:half]
+    pos_top_indices = np.argsort(pos_mags)[-5:][::-1] + DC_SKIP
+
+    print("Top 5 POSITIVE freq peaks (>5 mph, inbound):")
     for idx in pos_top_indices:
         mph = bin_to_mph(idx)
         print(f"  Bin {idx}: {magnitude[idx]:.1f} mag -> {mph:.1f} mph")
 
-    # Find top 5 peaks in negative frequencies (bins 2048 to 4095)
-    neg_mags = magnitude[half+1:]
+    # Find peaks in negative frequencies ABOVE DC region
+    # Negative freqs are at bins 2048-4095, so skip bins 4046-4095 (equiv to -50 to -1)
+    neg_mags = magnitude[half+1:FFT_SIZE-DC_SKIP]
     neg_top_indices = np.argsort(neg_mags)[-5:][::-1] + half + 1
 
-    print("Top 5 NEGATIVE freq peaks (outbound/away from radar):")
+    print("Top 5 NEGATIVE freq peaks (>5 mph, outbound):")
     for idx in neg_top_indices:
-        # Convert to negative bin for display
         neg_bin = idx - FFT_SIZE
         mph = bin_to_mph(neg_bin)
         print(f"  Bin {neg_bin} ({idx}): {magnitude[idx]:.1f} mag -> {mph:.1f} mph")
+
+    # Also show overall max in each half to see signal strength
+    pos_max_bin = np.argmax(magnitude[1:half]) + 1
+    neg_max_bin = np.argmax(magnitude[half+1:]) + half + 1
+    print(f"\nOverall max: POS bin {pos_max_bin} ({bin_to_mph(pos_max_bin):.1f} mph, {magnitude[pos_max_bin]:.1f}), "
+          f"NEG bin {neg_max_bin-FFT_SIZE} ({bin_to_mph(neg_max_bin-FFT_SIZE):.1f} mph, {magnitude[neg_max_bin]:.1f})")
+
+    # Check for signal in golf speed range (50-200 mph = bins 490-1960)
+    GOLF_MIN_BIN = 490   # ~50 mph
+    GOLF_MAX_BIN = 1960  # ~200 mph
+
+    pos_golf = magnitude[GOLF_MIN_BIN:GOLF_MAX_BIN]
+    neg_golf = magnitude[FFT_SIZE-GOLF_MAX_BIN:FFT_SIZE-GOLF_MIN_BIN]
+
+    pos_golf_max_idx = np.argmax(pos_golf) + GOLF_MIN_BIN
+    neg_golf_max_idx = FFT_SIZE - GOLF_MAX_BIN + np.argmax(neg_golf)
+
+    print(f"\n=== Golf Speed Range ({GOLF_MIN_BIN}-{GOLF_MAX_BIN} bins, 50-200 mph) ===")
+    print(f"POS max in range: bin {pos_golf_max_idx} -> {bin_to_mph(pos_golf_max_idx):.1f} mph, mag {magnitude[pos_golf_max_idx]:.1f}")
+    print(f"NEG max in range: bin {neg_golf_max_idx-FFT_SIZE} -> {bin_to_mph(neg_golf_max_idx-FFT_SIZE):.1f} mph, mag {magnitude[neg_golf_max_idx]:.1f}")
+    print(f"Noise floor in golf range: {np.median(pos_golf):.1f} (pos), {np.median(neg_golf):.1f} (neg)")
+
+    # Sample rate diagnostic: if peaks are at low bins, what sample rate would that imply?
+    # For a 45 mph swing: f_doppler = 2 * 20.1 m/s / 0.01243 = 3235 Hz
+    # At 30 kHz: bin = 3235 * 4096 / 30000 = 442
+    # At 10 kHz: bin = 3235 * 4096 / 10000 = 1325
+    # At 1 kHz: bin = 3235 * 4096 / 1000 = 13256 (wraps around)
+    print(f"\n=== Sample Rate Diagnostic ===")
+    print("Expected bins for 45 mph at different sample rates:")
+    for rate in [10000, 20000, 30000, 50000, 100000]:
+        expected_bin = int(3235 * 4096 / rate)
+        print(f"  {rate/1000:.0f} kHz: bin {expected_bin}")
+
+    # If we're seeing peaks at bin ~30, back-calculate what sample rate that implies
+    # for a 45 mph signal
+    if pos_max_bin > 10:
+        implied_rate = 3235 * 4096 / pos_max_bin
+        print(f"\nIf bin {pos_max_bin} is 45 mph, implied sample rate: {implied_rate/1000:.1f} kHz")
 
     # Method 2: Windowed approach (like our processor)
     print(f"\n=== Windowed 128-sample blocks (first 5 blocks) ===")
