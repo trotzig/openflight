@@ -6,7 +6,7 @@ This allows offline analysis and debugging of signal processing.
 Usage:
     python scripts/capture_iq.py [output_file.pkl]
 
-Default output: iq_captures_YYYYMMDD_HHMMSS.pkl
+Default output: ~/openflight_sessions/iq_captures_YYYYMMDD_HHMMSS.pkl
 """
 
 import pickle
@@ -48,7 +48,7 @@ def parse_capture(response: str) -> dict | None:
     if i_samples is None or q_samples is None:
         return None
 
-    # Compute complex signal (same as processor.py)
+    # Compute derived values (same as processor.py)
     i_centered = i_samples.astype(np.float64) - np.mean(i_samples)
     q_centered = q_samples.astype(np.float64) - np.mean(q_samples)
 
@@ -70,6 +70,7 @@ def parse_capture(response: str) -> dict | None:
         "q_scaled": q_scaled,
         "complex_signal": complex_signal,
         "capture_timestamp": datetime.now().isoformat(),
+        "response_length": len(response),
     }
 
 
@@ -108,28 +109,22 @@ def main():
         "window_size": 128,
     }
 
-    print("\nSwing a club or hit balls in front of the radar!")
+    print("\nCapturing I/Q data (including noise/baseline).")
+    print("Swing a club or hit balls to capture motion data.")
     print("Press Ctrl+C to stop and save\n")
 
     capture_count = 0
     try:
         while True:
-            # Trigger capture
-            print(".", end="", flush=True)
+            # Trigger capture (same as diagnose_fft.py)
             response = radar.trigger_capture(timeout=10.0)
 
-            # Debug: show response info
-            if not response:
-                print("(empty)", end="", flush=True)
-            elif len(response) < 100:
-                print(f"(short:{repr(response[:50])})", end="", flush=True)
-            else:
-                print(f"({len(response)}b)", end="", flush=True)
-
+            # Re-arm for next capture
             radar.rearm_rolling_buffer()
 
-            # Capture ALL responses (including noise/baseline)
+            # Try to parse - capture ALL valid responses
             capture = parse_capture(response)
+
             if capture:
                 capture_count += 1
                 captures.append(capture)
@@ -137,9 +132,22 @@ def main():
                 # Show quick stats
                 i_std = np.std(capture["i_raw"])
                 q_std = np.std(capture["q_raw"])
-                print(f"\n[{capture_count}] Captured: I std={i_std:.1f}, Q std={q_std:.1f}, "
-                      f"I range={capture['i_raw'].min()}-{capture['i_raw'].max()}, "
-                      f"Q range={capture['q_raw'].min()}-{capture['q_raw'].max()}")
+                i_range = capture['i_raw'].max() - capture['i_raw'].min()
+                q_range = capture['q_raw'].max() - capture['q_raw'].min()
+
+                # Indicate activity level
+                if i_range > 1000 or q_range > 1000:
+                    activity = "HIGH"
+                elif i_range > 200 or q_range > 200:
+                    activity = "med"
+                else:
+                    activity = "low"
+
+                print(f"[{capture_count}] {activity}: I({capture['i_raw'].min()}-{capture['i_raw'].max()}, std={i_std:.0f}) "
+                      f"Q({capture['q_raw'].min()}-{capture['q_raw'].max()}, std={q_std:.0f})")
+            else:
+                # Failed to parse
+                print(f"x", end="", flush=True)
 
             time.sleep(0.3)
 
@@ -150,6 +158,7 @@ def main():
 
     # Save to pickle
     if captures:
+        metadata["capture_end"] = datetime.now().isoformat()
         output_data = {
             "metadata": metadata,
             "captures": captures,
