@@ -81,6 +81,20 @@ class SpeedReading:
     unit: str = "mph"
 
 
+@dataclass
+class IQBlock:
+    """
+    A block of raw I/Q samples from the radar.
+
+    Each block contains 128 samples at 30ksps (~4.3ms of data).
+    Used for continuous I/Q streaming mode where we process
+    the FFT locally instead of using the radar's internal processing.
+    """
+    i_samples: List[int]  # Raw I channel ADC values (0-4095)
+    q_samples: List[int]  # Raw Q channel ADC values (0-4095)
+    timestamp: float      # When this block was received
+
+
 class OPS243Radar:
     """
     Driver for OPS243-A Doppler radar sensor.
@@ -122,6 +136,8 @@ class OPS243Radar:
         self._streaming = False
         self._stream_thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[SpeedReading], None]] = None
+        self._iq_callback: Optional[Callable[[IQBlock], None]] = None
+        self._iq_error_callback: Optional[Callable[[str], None]] = None
         self._unit = "mph"
         self._json_mode = False
         self._magnitude_enabled = False
@@ -785,11 +801,14 @@ class OPS243Radar:
         self._stream_thread.start()
 
     def stop_streaming(self):
-        """Stop continuous speed streaming."""
+        """Stop continuous speed or I/Q streaming."""
         self._streaming = False
         if self._stream_thread:
             self._stream_thread.join(timeout=2.0)
             self._stream_thread = None
+        self._callback = None
+        self._iq_callback = None
+        self._iq_error_callback = None
 
     def _stream_loop(self):
         """Internal streaming loop."""
@@ -976,9 +995,10 @@ class OPS243Radar:
         self.set_units(SpeedUnit.MPH)
         print("[RADAR CONFIG] Units: MPH")
 
-        # Max transmit power
-        self.set_transmit_power(0)
-        print("[RADAR CONFIG] Transmit power: max")
+        # Reduced transmit power to avoid ADC clipping on close targets
+        # Level 0=max, 7=min. Level 3 is a good balance.
+        self.set_transmit_power(3)
+        print("[RADAR CONFIG] Transmit power: level 3 (reduced to avoid clipping)")
 
         # Per OmniPreSense reference: deactivate first to reset state
         self._send_command("PI")
@@ -1012,6 +1032,155 @@ class OPS243Radar:
         self.set_trigger_split(8)
 
         print("[RADAR CONFIG] Rolling buffer mode configured")
+
+    # =========================================================================
+    # Continuous I/Q Streaming Mode (OR command)
+    # =========================================================================
+
+    def enable_raw_iq_output(self):
+        """
+        Enable raw I/Q ADC output for continuous streaming.
+
+        Uses the OR command per API doc AN-010-AD:
+        - I and Q output buffers from the ADC will be sent
+        - Data output alternates between I and Q buffers
+        - Not recommended for UART at low baud rates (USB is fine)
+
+        The output format is JSON with alternating I and Q arrays:
+        {"I": [sample0, sample1, ...]}
+        {"Q": [sample0, sample1, ...]}
+        """
+        print("[RADAR] Enabling raw I/Q output (OR command)...")
+        response = self._send_command("OR")
+        if response:
+            print(f"[RADAR] OR response: {response}")
+
+    def disable_raw_iq_output(self):
+        """Disable raw I/Q ADC output."""
+        print("[RADAR] Disabling raw I/Q output...")
+        self._send_command("Or")
+
+    def configure_for_iq_streaming(self):
+        """
+        Configure radar for continuous raw I/Q streaming mode.
+
+        This mode outputs raw I/Q ADC samples continuously, which we
+        process locally with FFT to extract speed. This replaces the
+        radar's internal FFT processing with our own.
+
+        Settings optimized for golf:
+        - 30ksps sample rate (max ~208 mph)
+        - 128 buffer size (matches our FFT window)
+        - Raw I/Q output enabled (OR command)
+        - No internal FFT processing (we do it ourselves)
+        """
+        print("[RADAR CONFIG] Configuring for continuous I/Q streaming...")
+
+        # Set units to MPH (for any fallback modes)
+        self.set_units(SpeedUnit.MPH)
+        print("[RADAR CONFIG] Units: MPH")
+
+        # Reduced transmit power to avoid ADC clipping on close targets
+        self.set_transmit_power(3)
+        print("[RADAR CONFIG] Transmit power: level 3 (reduced to avoid clipping)")
+
+        # 30ksps sample rate - matches rolling buffer for consistency
+        self.set_sample_rate(30000)
+        print("[RADAR CONFIG] Sample rate: 30ksps")
+
+        # 128 buffer size - this determines how many samples per I/Q output
+        self.set_buffer_size(128)
+        print("[RADAR CONFIG] Buffer size: 128 samples")
+
+        # Enable raw I/Q output
+        self.enable_raw_iq_output()
+        print("[RADAR CONFIG] Raw I/Q output enabled")
+
+        # Activate sampling
+        self._send_command("PA")
+        print("[RADAR CONFIG] Sampling activated")
+
+        print("[RADAR CONFIG] I/Q streaming mode configured")
+
+    def start_iq_streaming(
+        self,
+        callback: Callable[['IQBlock'], None],
+        error_callback: Optional[Callable[[str], None]] = None
+    ):
+        """
+        Start continuous I/Q streaming with callback for each block.
+
+        The radar outputs alternating I and Q JSON arrays. We pair them
+        and call the callback with each complete I/Q block.
+
+        Args:
+            callback: Function called with each IQBlock (128 I + 128 Q samples)
+            error_callback: Optional function called on parse errors
+        """
+        if self._streaming:
+            return
+
+        self._iq_callback = callback
+        self._iq_error_callback = error_callback
+        self._streaming = True
+        self._stream_thread = threading.Thread(target=self._iq_stream_loop, daemon=True)
+        self._stream_thread.start()
+
+    def _iq_stream_loop(self):
+        """Internal I/Q streaming loop - parses alternating I/Q buffers."""
+        pending_i = None
+        buffer = ""
+
+        while self._streaming:
+            try:
+                if not self.serial or not self.serial.is_open:
+                    time.sleep(0.1)
+                    continue
+
+                # Read available data
+                if self.serial.in_waiting:
+                    chunk = self.serial.read(self.serial.in_waiting)
+                    buffer += chunk.decode('ascii', errors='ignore')
+
+                    # Process complete lines
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+
+                        if not line or not line.startswith('{'):
+                            continue
+
+                        try:
+                            data = json.loads(line)
+
+                            if "I" in data:
+                                # Got I samples, store them
+                                pending_i = data["I"]
+                            elif "Q" in data and pending_i is not None:
+                                # Got Q samples, pair with pending I
+                                q_samples = data["Q"]
+
+                                if len(pending_i) == len(q_samples):
+                                    block = IQBlock(
+                                        i_samples=pending_i,
+                                        q_samples=q_samples,
+                                        timestamp=time.time()
+                                    )
+                                    if self._iq_callback:
+                                        self._iq_callback(block)
+
+                                pending_i = None
+
+                        except json.JSONDecodeError as e:
+                            if self._iq_error_callback:
+                                self._iq_error_callback(f"JSON parse error: {e}")
+                else:
+                    time.sleep(0.001)  # Brief sleep when no data
+
+            except Exception as e:
+                if self._streaming and self._iq_error_callback:
+                    self._iq_error_callback(f"Stream error: {e}")
+                time.sleep(0.01)
 
     def __enter__(self):
         """Context manager entry."""

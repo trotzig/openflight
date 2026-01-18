@@ -143,13 +143,14 @@ def main():
                 else:
                     activity = "low"
 
-                print(f"[{capture_count}] {activity}: I({capture['i_raw'].min()}-{capture['i_raw'].max()}, std={i_std:.0f}) "
+                n_samples = len(capture['i_raw'])
+                print(f"[{capture_count}] {n_samples} samples, {activity}: I({capture['i_raw'].min()}-{capture['i_raw'].max()}, std={i_std:.0f}) "
                       f"Q({capture['q_raw'].min()}-{capture['q_raw'].max()}, std={q_std:.0f})")
             else:
                 # Failed to parse
                 print(f"x", end="", flush=True)
 
-            time.sleep(0.3)
+            # No sleep - capture as fast as serial allows
 
     except KeyboardInterrupt:
         print(f"\n\nStopping... captured {capture_count} frames")
