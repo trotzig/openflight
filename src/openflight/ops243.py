@@ -1049,11 +1049,24 @@ class OPS243Radar:
         The output format is JSON with alternating I and Q arrays:
         {"I": [sample0, sample1, ...]}
         {"Q": [sample0, sample1, ...]}
+
+        Note: After OR command, radar immediately starts streaming.
+        We don't wait for a response as the output buffer fills with I/Q data.
         """
         print("[RADAR] Enabling raw I/Q output (OR command)...")
-        response = self._send_command("OR")
-        if response:
-            print(f"[RADAR] OR response: {response}")
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
+        # Clear buffer before sending
+        self.serial.reset_input_buffer()
+
+        # Send OR command - radar starts streaming immediately after this
+        # Don't use _send_command() as it would try to read a response
+        # but the radar is now outputting continuous I/Q data
+        self.serial.write(b"OR")
+
+        # Brief pause to let command process
+        time.sleep(0.05)
 
     def disable_raw_iq_output(self):
         """Disable raw I/Q ADC output."""
@@ -1092,13 +1105,9 @@ class OPS243Radar:
         self.set_buffer_size(128)
         print("[RADAR CONFIG] Buffer size: 128 samples")
 
-        # Enable raw I/Q output
+        # Enable raw I/Q output - this starts streaming immediately
+        # No need for PA command as OR already activates continuous output
         self.enable_raw_iq_output()
-        print("[RADAR CONFIG] Raw I/Q output enabled")
-
-        # Activate sampling
-        self._send_command("PA")
-        print("[RADAR CONFIG] Sampling activated")
 
         print("[RADAR CONFIG] I/Q streaming mode configured")
 
