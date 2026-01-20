@@ -967,7 +967,9 @@ def main():
     print()
 
     try:
-        socketio.run(app, host=args.host, port=args.web_port, debug=args.debug, allow_unsafe_werkzeug=True)
+        # Note: Flask debug mode (reloader) is disabled to prevent duplicate processes
+        # fighting over the serial port. OpenFlight --debug enables verbose logging only.
+        socketio.run(app, host=args.host, port=args.web_port, debug=False, allow_unsafe_werkzeug=True)
     finally:
         stop_camera_thread()
         if camera:
