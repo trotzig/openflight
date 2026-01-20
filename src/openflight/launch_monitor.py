@@ -363,6 +363,10 @@ class LaunchMonitor:
             shot_callback: Called when a complete shot is detected
             live_callback: Called for each raw speed reading
         """
+        # Stop any existing monitoring first
+        if self._running:
+            self.stop()
+
         self._shot_callback = shot_callback
         self._live_callback = live_callback
         self._running = True

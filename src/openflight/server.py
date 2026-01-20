@@ -664,6 +664,11 @@ def start_monitor(
     """
     global monitor, mock_mode  # pylint: disable=global-statement
 
+    # Stop any existing monitor first
+    if monitor is not None:
+        print("[MONITOR] Stopping existing monitor before starting new one")
+        stop_monitor()
+
     mock_mode = mock
     if mock:
         # Mock mode for testing without radar
