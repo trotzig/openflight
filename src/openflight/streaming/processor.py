@@ -173,15 +173,15 @@ class StreamingIQProcessor:
             if not (cfg.min_speed_mph <= speed_mph <= cfg.max_speed_mph):
                 return None
 
-        # Store detection metadata for logging
-        self._last_snr = snr
-        self._last_peak_bin = peak_bin
+        # Store detection metadata for logging (convert numpy to native Python types)
+        self._last_snr = float(snr)
+        self._last_peak_bin = int(peak_bin)
         self._last_cfar_validated = cfar_validated
 
         return SpeedReading(
-            speed=speed_mph,
+            speed=float(speed_mph),
             direction=direction,
-            magnitude=peak_mag,
+            magnitude=float(peak_mag),
             timestamp=block.timestamp,
             unit="mph"
         )
@@ -243,7 +243,7 @@ class StreamingSpeedDetector:
                 logger.log_iq_reading(
                     speed_mph=reading.speed,
                     direction=reading.direction.value,
-                    magnitude=reading.magnitude,
+                    magnitude=reading.magnitude or 0.0,
                     snr=getattr(self.processor, '_last_snr', 0.0),
                     peak_bin=getattr(self.processor, '_last_peak_bin', 0),
                     cfar_validated=getattr(self.processor, '_last_cfar_validated', False),
