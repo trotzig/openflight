@@ -807,6 +807,11 @@ class OPS243Radar:
             self._stream_thread.join(timeout=2.0)
             self._stream_thread = None
         self._callback = None
+
+        # If we were doing I/Q streaming, tell radar to stop
+        if self._iq_callback is not None:
+            self.disable_raw_iq_output()
+
         self._iq_callback = None
         self._iq_error_callback = None
 
@@ -1069,9 +1074,21 @@ class OPS243Radar:
         time.sleep(0.05)
 
     def disable_raw_iq_output(self):
-        """Disable raw I/Q ADC output."""
-        print("[RADAR] Disabling raw I/Q output...")
-        self._send_command("Or")
+        """
+        Disable raw I/Q ADC output.
+
+        Note: Must send command directly without waiting for response,
+        as radar may be actively streaming I/Q data.
+        """
+        if not self.serial or not self.serial.is_open:
+            return
+
+        # Send Or command directly - don't use _send_command as radar may be streaming
+        self.serial.write(b"Or")
+        time.sleep(0.1)
+
+        # Clear any buffered I/Q data
+        self.serial.reset_input_buffer()
 
     def configure_for_iq_streaming(self):
         """
@@ -1088,6 +1105,10 @@ class OPS243Radar:
         - No internal FFT processing (we do it ourselves)
         """
         print("[RADAR CONFIG] Configuring for continuous I/Q streaming...")
+
+        # First, stop any existing I/Q streaming (from previous run or crash)
+        # This ensures _send_command won't hang on buffered I/Q data
+        self.disable_raw_iq_output()
 
         # Set units to MPH (for any fallback modes)
         self.set_units(SpeedUnit.MPH)
