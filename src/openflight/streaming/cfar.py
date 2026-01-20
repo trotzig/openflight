@@ -27,8 +27,9 @@ class CFARConfig:
     # Higher = fewer false alarms, but may miss weak signals
     threshold_factor: float = 15.0  # Tuned to reject noise while detecting swings
 
-    # Minimum absolute threshold (not currently used in SNR-based detection)
-    threshold_offset: float = 50.0
+    # Minimum absolute threshold (0 = pure SNR-based detection)
+    # Note: FFT magnitudes are voltage-scaled (0-3.3V range), so this should be small
+    threshold_offset: float = 0.0
 
     # DC/low speed masking - bins to ignore around zero Doppler
     # At 30ksps with 4096 FFT: bin 150 ≈ 15 mph

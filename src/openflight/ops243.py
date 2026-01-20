@@ -122,8 +122,6 @@ class OPS243Radar:
     # Common USB identifiers for OPS243
     VENDOR_IDS = [0x0483]  # STMicroelectronics
 
-    _instance_counter = 0  # Class-level counter for debugging
-
     def __init__(self, port: Optional[str] = None, baud: int = DEFAULT_BAUD):
         """
         Initialize radar driver.
@@ -132,10 +130,6 @@ class OPS243Radar:
             port: Serial port (e.g., '/dev/ttyACM0'). If None, auto-detect.
             baud: Baud rate (default 57600 per datasheet)
         """
-        OPS243Radar._instance_counter += 1
-        self._instance_id = OPS243Radar._instance_counter
-        print(f"[RADAR] Created OPS243Radar instance #{self._instance_id}")
-
         self.port = port
         self.baud = baud
         self.serial: Optional[serial.Serial] = None
@@ -1151,9 +1145,7 @@ class OPS243Radar:
             callback: Function called with each IQBlock (128 I + 128 Q samples)
             error_callback: Optional function called on parse errors
         """
-        print(f"[RADAR] start_iq_streaming called, _streaming={self._streaming}, id={id(self)}")
         if self._streaming:
-            print("[RADAR] Already streaming, returning early")
             return
 
         # Enable raw I/Q output - this starts the radar streaming
@@ -1164,13 +1156,9 @@ class OPS243Radar:
         self._streaming = True
         self._stream_thread = threading.Thread(target=self._iq_stream_loop, daemon=True)
         self._stream_thread.start()
-        print(f"[RADAR] Started streaming thread {self._stream_thread.ident}")
 
     def _iq_stream_loop(self):
         """Internal I/Q streaming loop - parses alternating I/Q buffers."""
-        import threading as _threading
-        print(f"[RADAR] _iq_stream_loop started on thread {_threading.current_thread().ident}")
-
         pending_i = None
         buffer = ""
         error_count = 0
@@ -1221,12 +1209,6 @@ class OPS243Radar:
                                         timestamp=time.time()
                                     )
                                     if self._iq_callback:
-                                        # Debug: log thread calling callback (every 100 blocks)
-                                        if not hasattr(self, '_cb_count'):
-                                            self._cb_count = 0
-                                        self._cb_count += 1
-                                        if self._cb_count % 100 == 1:
-                                            print(f"[RADAR] Calling callback from thread {_threading.current_thread().ident}")
                                         self._iq_callback(block)
 
                                 pending_i = None

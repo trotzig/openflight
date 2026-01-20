@@ -49,13 +49,7 @@ class StreamingIQProcessor:
     6. Convert to SpeedReading if valid
     """
 
-    _instance_counter = 0  # Class-level counter for debugging
-
     def __init__(self, config: Optional[StreamingConfig] = None, debug: bool = False):
-        StreamingIQProcessor._instance_counter += 1
-        self._instance_id = StreamingIQProcessor._instance_counter
-        print(f"[PROCESSOR] Created StreamingIQProcessor instance #{self._instance_id}")
-
         self.config = config or StreamingConfig()
         self.debug = debug
         self.hanning_window = np.hanning(self.config.window_size)
@@ -125,7 +119,7 @@ class StreamingIQProcessor:
             noise_floor = np.median(magnitude[dc_mask:half])
             snr = pos_peak_mag / max(noise_floor, 1e-10)
             speed = self.bin_to_mph[pos_peak_bin]
-            print(f"   [IQ#{self._instance_id}] blk={self._block_count} peak={pos_peak_mag:.4f} SNR={snr:.1f} "
+            print(f"   [IQ] blk={self._block_count} peak={pos_peak_mag:.4f} SNR={snr:.1f} "
                   f"speed={speed:.1f}mph buf={len(self.spectrogram_buffer)}/{cfg.cfar.spectrogram_length}")
 
         # Only run CFAR detection when we have enough data (every 8 blocks)
@@ -138,8 +132,7 @@ class StreamingIQProcessor:
         detections = self.cfar.detect(spectrogram)
 
         if self.debug:
-            import threading as _th
-            print(f">>>[CFAR#{self._instance_id}] blk={self._block_count} frames={len(spectrogram)} detections={len(detections)} tid={_th.current_thread().ident}")
+            print(f">>>[CFAR] blk={self._block_count} frames={len(spectrogram)} detections={len(detections)}")
 
         if not detections:
             return None  # CFAR says no valid detection
