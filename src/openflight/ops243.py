@@ -1161,6 +1161,8 @@ class OPS243Radar:
         """Internal I/Q streaming loop - parses alternating I/Q buffers."""
         pending_i = None
         buffer = ""
+        error_count = 0
+        max_errors_before_log = 10  # Only log every N errors to avoid spam
 
         while self._streaming:
             try:
@@ -1168,17 +1170,26 @@ class OPS243Radar:
                     time.sleep(0.1)
                     continue
 
-                # Read available data
-                if self.serial.in_waiting:
-                    chunk = self.serial.read(self.serial.in_waiting)
-                    buffer += chunk.decode('ascii', errors='ignore')
+                # Read available data with timeout to avoid blocking
+                waiting = self.serial.in_waiting
+                if waiting > 0:
+                    chunk = self.serial.read(waiting)
+                    if chunk:
+                        buffer += chunk.decode('ascii', errors='ignore')
 
-                    # Process complete lines
+                    # Process complete lines (ending with newline)
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip()
 
-                        if not line or not line.startswith('{'):
+                        # Skip empty lines or non-JSON
+                        if not line:
+                            continue
+
+                        # Validate line looks like complete JSON object
+                        if not (line.startswith('{') and line.endswith('}')):
+                            # Incomplete or corrupted line - skip it
+                            error_count += 1
                             continue
 
                         try:
@@ -1202,16 +1213,31 @@ class OPS243Radar:
 
                                 pending_i = None
 
-                        except json.JSONDecodeError as e:
-                            if self._iq_error_callback:
-                                self._iq_error_callback(f"JSON parse error: {e}")
+                        except json.JSONDecodeError:
+                            # Corrupted JSON - skip silently (common with serial)
+                            error_count += 1
+
+                    # Prevent buffer from growing too large (indicates sync issues)
+                    if len(buffer) > 10000:
+                        # Find last newline and keep only data after it
+                        last_nl = buffer.rfind('\n')
+                        if last_nl > 0:
+                            buffer = buffer[last_nl + 1:]
+                        else:
+                            buffer = ""
+                        pending_i = None  # Reset state
                 else:
                     time.sleep(0.001)  # Brief sleep when no data
 
+            except serial.SerialException:
+                # Device disconnected or busy - wait and retry
+                time.sleep(0.05)
             except Exception as e:
                 if self._streaming and self._iq_error_callback:
-                    self._iq_error_callback(f"Stream error: {e}")
-                time.sleep(0.01)
+                    # Only log occasional errors to avoid spam
+                    error_count += 1
+                    if error_count % max_errors_before_log == 0:
+                        self._iq_error_callback(f"Stream errors: {error_count} total")
 
     def __enter__(self):
         """Context manager entry."""
