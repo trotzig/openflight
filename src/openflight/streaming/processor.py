@@ -138,7 +138,8 @@ class StreamingIQProcessor:
         detections = self.cfar.detect(spectrogram)
 
         if self.debug:
-            print(f">>>[CFAR#{self._instance_id}] blk={self._block_count} frames={len(spectrogram)} detections={len(detections)}")
+            import threading as _th
+            print(f">>>[CFAR#{self._instance_id}] blk={self._block_count} frames={len(spectrogram)} detections={len(detections)} tid={_th.current_thread().ident}")
 
         if not detections:
             return None  # CFAR says no valid detection
