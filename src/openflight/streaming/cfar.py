@@ -36,6 +36,16 @@ class CFARConfig:
     # This masks out stationary clutter and slow movements
     dc_mask_bins: int = 150         # Mask bins 0-150 and 3946-4095 (~15 mph)
 
+    # Nyquist masking - bins to ignore near Nyquist frequency (max detectable speed)
+    # At 30ksps with 4096 FFT: bin 2047 = Nyquist-1 = ~208 mph
+    # Body reflection artifacts appear at this edge when standing in front of radar
+    nyquist_mask_bins: int = 10     # Mask bins 2038-2047 and 2048-2057
+
+    # Minimum magnitude threshold for detection
+    # Real golf signals have magnitude 1-100+, noise artifacts are 0.05-0.2
+    # This filters out low-energy edge artifacts that pass SNR threshold
+    min_magnitude: float = 0.5
+
     # Edge masking - don't detect near spectrogram edges
     edge_mask_time: int = 4         # Mask first/last N time windows
     edge_mask_freq: int = 50        # Mask first/last N frequency bins

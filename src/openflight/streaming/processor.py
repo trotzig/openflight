@@ -108,16 +108,23 @@ class StreamingIQProcessor:
 
         half = cfg.fft_size // 2
         dc_mask = cfg.cfar.dc_mask_bins
+        nyquist_mask = cfg.cfar.nyquist_mask_bins
 
-        # Analyze positive frequencies (outbound) above DC mask
-        pos_region = magnitude[dc_mask:half]
+        # Valid frequency ranges (excluding DC and Nyquist edges)
+        # Positive frequencies: dc_mask to (half - nyquist_mask)
+        # Negative frequencies: (half + nyquist_mask) to (fft_size - dc_mask)
+        pos_end = half - nyquist_mask
+        neg_start = half + nyquist_mask
+        neg_end = cfg.fft_size - dc_mask
+
+        # Analyze positive frequencies (outbound) - excludes DC and Nyquist
+        pos_region = magnitude[dc_mask:pos_end]
         pos_peak_idx = np.argmax(pos_region)
         pos_peak_bin = pos_peak_idx + dc_mask
         pos_peak_mag = magnitude[pos_peak_bin]
 
-        # Analyze negative frequencies (inbound) above DC mask
-        neg_start = half + dc_mask
-        neg_region = magnitude[neg_start:]
+        # Analyze negative frequencies (inbound) - excludes DC and Nyquist
+        neg_region = magnitude[neg_start:neg_end]
         neg_peak_idx = np.argmax(neg_region)
         neg_peak_bin = neg_peak_idx + neg_start
         neg_peak_mag = magnitude[neg_peak_bin]
@@ -152,6 +159,13 @@ class StreamingIQProcessor:
 
         if snr < snr_threshold:
             return None  # Signal not strong enough
+
+        # Minimum magnitude filter (rejects low-energy edge artifacts)
+        min_mag = cfg.cfar.min_magnitude
+        if peak_mag < min_mag:
+            if self.debug:
+                print(f"   [LOW-MAG] mag={peak_mag:.4f} < {min_mag} speed={speed_mph:.1f}mph")
+            return None
 
         # Speed filter
         if not (cfg.min_speed_mph <= speed_mph <= cfg.max_speed_mph):
