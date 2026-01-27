@@ -3,6 +3,10 @@ Camera module for launch angle and spin detection.
 
 Uses Raspberry Pi HQ Camera with IR illumination to track
 golf ball trajectory from behind the tee.
+
+Tracking options:
+- BallTracker: Hough circles + ByteTrack (recommended for Pi)
+- HybridBallTracker: Optional YOLO detection for better hardware
 """
 
 from .capture import (
@@ -22,6 +26,13 @@ from .launch_angle import (
     LaunchAngles,
     CameraCalibration,
 )
+from .tracker import (
+    BallTracker,
+    HybridBallTracker,
+    TrackedBall,
+    BallTrajectory,
+    TrackerConfig,
+)
 
 __all__ = [
     # Capture
@@ -34,6 +45,12 @@ __all__ = [
     "BallDetector",
     "DetectedBall",
     "DetectorConfig",
+    # Tracking
+    "BallTracker",
+    "HybridBallTracker",
+    "TrackedBall",
+    "BallTrajectory",
+    "TrackerConfig",
     # Launch angle
     "LaunchAngleCalculator",
     "LaunchAngles",

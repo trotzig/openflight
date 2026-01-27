@@ -35,6 +35,7 @@ from .trigger import (
     PollingTrigger,
     ThresholdTrigger,
     ManualTrigger,
+    SpeedTriggeredCapture,
     create_trigger,
 )
 
@@ -58,6 +59,7 @@ __all__ = [
     "PollingTrigger",
     "ThresholdTrigger",
     "ManualTrigger",
+    "SpeedTriggeredCapture",
     "create_trigger",
     # Monitor
     "RollingBufferMonitor",

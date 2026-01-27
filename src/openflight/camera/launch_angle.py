@@ -17,6 +17,13 @@ except ImportError:
 
 from .detector import DetectedBall
 
+# Optional import for TrackedBall/BallTrajectory integration
+try:
+    from .tracker import TrackedBall, BallTrajectory
+    TRACKER_AVAILABLE = True
+except ImportError:
+    TRACKER_AVAILABLE = False
+
 
 @dataclass
 class CameraCalibration:
@@ -387,3 +394,76 @@ class LaunchAngleCalculator:
         ) / ball_diameter_px
 
         return distance
+
+    def calculate_from_trajectory(
+        self,
+        trajectory: "BallTrajectory",
+        ball_speed_mph: Optional[float] = None,
+        framerate: float = 120.0
+    ) -> Optional[LaunchAngles]:
+        """
+        Calculate launch angles from a tracked ball trajectory.
+
+        This is the preferred method when using BallTracker, as it works
+        directly with the trajectory object and handles frame gaps.
+
+        Args:
+            trajectory: BallTrajectory from BallTracker
+            ball_speed_mph: Optional ball speed from radar for better accuracy
+            framerate: Camera framerate
+
+        Returns:
+            LaunchAngles if calculation successful, None otherwise
+        """
+        if not TRACKER_AVAILABLE:
+            raise RuntimeError("Tracker module not available")
+
+        if trajectory.num_frames < self.min_detections:
+            return None
+
+        # Convert TrackedBall positions to format expected by calculate methods
+        positions = trajectory.positions[:self.max_frames]
+
+        indices = np.array([p.frame_number for p in positions])
+        x_positions = np.array([p.x for p in positions])
+        y_positions = np.array([p.y for p in positions])
+        confidences = np.array([p.confidence for p in positions])
+
+        # Normalize indices to start from 0
+        indices = indices - indices[0]
+
+        # Fit trajectory
+        vx, x0 = self._fit_line(indices, x_positions, confidences)
+        vy, y0 = self._fit_line(indices, y_positions, confidences)
+
+        # Calculate angles
+        if ball_speed_mph:
+            # Use radar-derived distance for accuracy
+            ball_speed_mms = ball_speed_mph * 0.44704 * 1000
+            distance_per_frame_mm = ball_speed_mms / framerate
+
+            ppm = self.calibration.pixels_per_mm_at_ball
+            vy_mm = -vy / ppm
+            vx_mm = vx / ppm
+
+            vertical_angle = math.degrees(math.atan(vy_mm / distance_per_frame_mm))
+            horizontal_angle = math.degrees(math.atan(vx_mm / distance_per_frame_mm))
+        else:
+            vertical_angle = self._velocity_to_vertical_angle(-vy, vx)
+            horizontal_angle = self._velocity_to_horizontal_angle(vx)
+
+        fit_confidence = self._calculate_fit_confidence(
+            indices, x_positions, y_positions, vx, vy, x0, y0
+        )
+        overall_confidence = fit_confidence * np.mean(confidences)
+
+        return LaunchAngles(
+            vertical_deg=vertical_angle,
+            horizontal_deg=horizontal_angle,
+            confidence=overall_confidence,
+            frames_used=len(positions),
+            initial_x=x0,
+            initial_y=y0,
+            velocity_x=vx,
+            velocity_y=vy
+        )
