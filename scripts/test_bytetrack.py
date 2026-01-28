@@ -221,9 +221,9 @@ class GolfBallFilter:
 
     def __init__(
         self,
-        launch_velocity: float = 10.0,
-        stationary_timeout: int = 120,
-        min_confidence: float = 0.6,
+        launch_velocity: float = 8.0,
+        stationary_timeout: int = 180,
+        min_confidence: float = 0.4,
     ):
         """
         Args:
@@ -407,7 +407,7 @@ def main():
     # Hough settings
     parser.add_argument("--min-radius", type=int, default=5, help="Min circle radius")
     parser.add_argument("--max-radius", type=int, default=50, help="Max circle radius")
-    parser.add_argument("--min-brightness", type=int, default=150,
+    parser.add_argument("--min-brightness", type=int, default=100,
                        help="Min brightness for golf ball (0-255, golf balls are bright/white)")
     parser.add_argument("--no-brightness-filter", action="store_true",
                        help="Disable brightness filtering")
@@ -421,9 +421,9 @@ def main():
                        help="Minimum IoU threshold for matching")
 
     # Golf ball filter settings
-    parser.add_argument("--launch-velocity", type=float, default=10.0,
+    parser.add_argument("--launch-velocity", type=float, default=8.0,
                        help="Velocity threshold to detect ball launch (pixels/frame)")
-    parser.add_argument("--stationary-timeout", type=int, default=120,
+    parser.add_argument("--stationary-timeout", type=int, default=180,
                        help="Frames before filtering low-confidence stationary objects")
     parser.add_argument("--no-golf-filter", action="store_true",
                        help="Disable golf ball filtering (show all detections)")
