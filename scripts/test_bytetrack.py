@@ -266,6 +266,7 @@ def main():
     # Hough settings
     parser.add_argument("--min-radius", type=int, default=5, help="Min circle radius")
     parser.add_argument("--max-radius", type=int, default=50, help="Max circle radius")
+    parser.add_argument("--param2", type=int, default=20, help="Hough sensitivity (lower=more sensitive)")
 
     # ByteTrack settings
     parser.add_argument("--track-buffer", type=int, default=30,
@@ -303,7 +304,8 @@ def main():
         print("Using Hough Circle detector")
         detector = HoughDetector(
             min_radius=args.min_radius,
-            max_radius=args.max_radius
+            max_radius=args.max_radius,
+            param2=args.param2
         )
 
     # Initialize ByteTrack
