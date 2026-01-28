@@ -18,17 +18,11 @@ Usage:
     # Test with image sequence (simulates tracking)
     python scripts/test_bytetrack.py --images frame_*.png
 
-    # Use white blob detection (better for carpet/grass)
-    python scripts/test_bytetrack.py --white-detect
-
     # Use YOLO detection instead of Hough circles
     python scripts/test_bytetrack.py --detector yolo --model models/golf_ball_yolo11n_new_256.onnx
 
     # Adjust tracking parameters
     python scripts/test_bytetrack.py --track-thresh 0.3 --track-buffer 30
-
-    # Fix camera colors (white balance)
-    python scripts/test_bytetrack.py --awb auto
 """
 
 import argparse
@@ -92,16 +86,13 @@ class HoughDetector:
 
     def __init__(
         self,
-        min_radius: int = 8,
-        max_radius: int = 40,
+        min_radius: int = 5,
+        max_radius: int = 50,
         param1: int = 50,
-        param2: int = 25,  # Balance between sensitivity and noise
-        min_dist: int = 40,
-        min_brightness: int = 140,  # Golf balls are WHITE
-        min_uniformity: float = 0.7,  # How uniform the circle brightness is
+        param2: int = 30,
+        min_dist: int = 50,
+        min_brightness: int = 150,
         brightness_filter: bool = True,
-        enhance_contrast: bool = True,
-        use_white_detection: bool = False,  # Color-based white detection
     ):
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -109,125 +100,17 @@ class HoughDetector:
         self.param2 = param2
         self.min_dist = min_dist
         self.min_brightness = min_brightness
-        self.min_uniformity = min_uniformity
         self.brightness_filter = brightness_filter
-        self.enhance_contrast = enhance_contrast
-        self.use_white_detection = use_white_detection
 
-    def _detect_white_blobs(self, frame: np.ndarray, is_rgb: bool = False) -> List[Detection]:
-        """
-        Detect white circular objects using adaptive brightness thresholding.
-
-        Better for low-contrast situations (ball on carpet, grass, etc.)
-        where edge-based Hough detection struggles.
-        """
-        # Convert to grayscale
-        if is_rgb:
-            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        h, w = gray.shape[:2]
-
-        # Use adaptive thresholding to find bright regions relative to surroundings
-        # This works better than fixed threshold in varying lighting
-        binary = cv2.adaptiveThreshold(
-            gray, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            blockSize=31,  # Local area size
-            C=-15  # Negative C means we want bright spots
-        )
-
-        # Also try simple Otsu thresholding as fallback
-        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Combine both methods - OR them together
-        combined = cv2.bitwise_or(binary, otsu)
-
-        # Morphological operations to clean up
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
-        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
-
-        # Find contours of bright regions
-        contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        detections = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-
-            # Filter by area (approximate ball size)
-            min_area = np.pi * self.min_radius ** 2 * 0.5  # Allow smaller
-            max_area = np.pi * self.max_radius ** 2 * 2.0  # Allow larger
-            if area < min_area or area > max_area:
-                continue
-
-            # Get enclosing circle
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            cx, cy, radius = int(cx), int(cy), int(radius)
-
-            # Radius bounds check
-            if radius < self.min_radius or radius > self.max_radius:
-                continue
-
-            # Check circularity (area vs enclosing circle area)
-            enclosing_area = np.pi * radius ** 2
-            circularity = area / enclosing_area if enclosing_area > 0 else 0
-
-            # Golf balls should be fairly circular (lenient)
-            if circularity < 0.4:
-                continue
-
-            # Bounds check
-            if cx - radius < 0 or cx + radius >= w or cy - radius < 0 or cy + radius >= h:
-                continue
-
-            # Get actual brightness of the region
-            mask = np.zeros_like(gray)
-            cv2.circle(mask, (cx, cy), radius, 255, -1)
-            mean_brightness = cv2.mean(gray, mask=mask)[0]
-
-            # Must still be reasonably bright (but lower threshold)
-            if mean_brightness < 100:
-                continue
-
-            # Confidence based on circularity and brightness
-            confidence = circularity * (mean_brightness / 255.0)
-
-            detections.append(Detection(
-                x=float(cx),
-                y=float(cy),
-                radius=float(radius),
-                confidence=confidence
-            ))
-
-        return detections
-
-    def detect(self, frame: np.ndarray, is_rgb: bool = False) -> List[Detection]:
+    def detect(self, frame: np.ndarray) -> List[Detection]:
         """Detect circles in frame, filtering for bright golf ball candidates."""
-        # Use white blob detection if enabled (better for low-contrast surfaces)
-        if self.use_white_detection:
-            return self._detect_white_blobs(frame, is_rgb)
-
         # Convert to grayscale
         if len(frame.shape) == 3:
-            if is_rgb:
-                gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
-            gray = frame.copy()
-
-        # Keep original for brightness checking (before CLAHE)
-        gray_original = gray.copy()
+            gray = frame
 
         h, w = gray.shape[:2]
-
-        # Enhance contrast for edge detection only
-        if self.enhance_contrast:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            gray = clahe.apply(gray)
 
         # Apply blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
@@ -254,49 +137,21 @@ class HoughDetector:
                 if x - r < 0 or x + r >= w or y - r < 0 or y + r >= h:
                     continue
 
+                # FILTER 1: Brightness check - golf balls are white/bright
                 if self.brightness_filter:
-                    # Use ORIGINAL image for brightness (not CLAHE enhanced)
-                    # Create circular mask for the detection
-                    mask = np.zeros((2*r, 2*r), dtype=np.uint8)
-                    cv2.circle(mask, (r, r), r, 255, -1)
+                    # Sample the center region of the detection
+                    sample_r = max(2, r // 2)
+                    roi = gray[y - sample_r:y + sample_r, x - sample_r:x + sample_r]
+                    if roi.size > 0:
+                        center_brightness = np.mean(roi)
+                        if center_brightness < self.min_brightness:
+                            continue  # Too dark, not a golf ball
 
-                    # Extract ROI
-                    roi = gray_original[y-r:y+r, x-r:x+r]
-                    if roi.shape[0] != 2*r or roi.shape[1] != 2*r:
-                        continue
-
-                    # Get pixels inside the circle
-                    circle_pixels = roi[mask == 255]
-                    if len(circle_pixels) == 0:
-                        continue
-
-                    # Check brightness
-                    mean_brightness = np.mean(circle_pixels)
-                    if mean_brightness < self.min_brightness:
-                        continue  # Too dark
-
-                    # Check uniformity - golf balls are solid white, not edges/gradients
-                    std_brightness = np.std(circle_pixels)
-                    uniformity = 1.0 - (std_brightness / 128.0)  # Lower std = more uniform
-                    if uniformity < self.min_uniformity:
-                        continue  # Too varied, probably an edge or texture
-
-                    # CIRCULARITY CHECK - verify it's actually round, not a white rectangle
-                    # Compare brightness inside circle vs corners of bounding box
-                    # A real circle should have darker corners (background showing)
-                    corner_mask = np.ones((2*r, 2*r), dtype=np.uint8) * 255
-                    cv2.circle(corner_mask, (r, r), r, 0, -1)  # Mask out the circle
-                    corner_pixels = roi[corner_mask == 255]
-
-                    if len(corner_pixels) > 10:
-                        corner_brightness = np.mean(corner_pixels)
-                        # Ball should be significantly brighter than corners
-                        # If corners are also bright, it's probably a white rectangle
-                        if corner_brightness > self.min_brightness * 0.85:
-                            continue  # Corners too bright - probably a white box, not a ball
-
-                    # Confidence based on brightness and uniformity
-                    confidence = (mean_brightness / 255.0) * uniformity
+                        # Calculate confidence based on brightness (brighter = higher confidence)
+                        # Golf balls should be very bright (200+)
+                        confidence = min(1.0, center_brightness / 255.0)
+                    else:
+                        confidence = 0.5
                 else:
                     confidence = 0.8
 
@@ -540,9 +395,6 @@ def main():
     parser.add_argument("--width", type=int, default=640, help="Camera width")
     parser.add_argument("--height", type=int, default=480, help="Camera height")
     parser.add_argument("--fps", type=int, default=60, help="Camera FPS")
-    parser.add_argument("--awb", type=str, default=None,
-                       choices=["auto", "daylight", "cloudy", "tungsten", "fluorescent", "indoor"],
-                       help="Camera auto white balance mode (fixes color issues)")
 
     # Detector settings
     parser.add_argument("--detector", type=str, default="hough",
@@ -553,20 +405,12 @@ def main():
     parser.add_argument("--confidence", type=float, default=0.3, help="Detection confidence")
 
     # Hough settings
-    parser.add_argument("--min-radius", type=int, default=8, help="Min circle radius")
-    parser.add_argument("--max-radius", type=int, default=40, help="Max circle radius")
-    parser.add_argument("--param2", type=int, default=25,
-                       help="Hough sensitivity (lower=more detections)")
-    parser.add_argument("--min-brightness", type=int, default=140,
-                       help="Min brightness for golf ball (0-255, golf balls are WHITE)")
-    parser.add_argument("--min-uniformity", type=float, default=0.7,
-                       help="Min uniformity (0-1, golf balls are solid, not edges)")
+    parser.add_argument("--min-radius", type=int, default=5, help="Min circle radius")
+    parser.add_argument("--max-radius", type=int, default=50, help="Max circle radius")
+    parser.add_argument("--min-brightness", type=int, default=100,
+                       help="Min brightness for golf ball (0-255, golf balls are bright/white)")
     parser.add_argument("--no-brightness-filter", action="store_true",
-                       help="Disable brightness/uniformity filtering")
-    parser.add_argument("--no-contrast-enhance", action="store_true",
-                       help="Disable contrast enhancement (CLAHE)")
-    parser.add_argument("--white-detect", action="store_true",
-                       help="Use color-based white detection (better for carpet/grass)")
+                       help="Disable brightness filtering")
 
     # ByteTrack settings
     parser.add_argument("--track-buffer", type=int, default=30,
@@ -609,26 +453,13 @@ def main():
         print(f"Using YOLO detector: {args.model}")
         detector = YOLODetector(args.model, args.imgsz, args.confidence)
     else:
-        if args.white_detect:
-            print("Using WHITE BLOB detector (color-based)")
-            print(f"  Better for low-contrast surfaces (carpet, grass)")
-        else:
-            print("Using Hough Circle detector")
-            print(f"  Contrast enhancement: {'OFF' if args.no_contrast_enhance else 'ON (CLAHE)'}")
-        print(f"  Sensitivity (param2): {args.param2} (lower=more sensitive)")
-        if not args.no_brightness_filter:
-            print(f"  Brightness filter: ON (min={args.min_brightness}, uniformity={args.min_uniformity})")
-        else:
-            print(f"  Brightness filter: OFF")
+        print("Using Hough Circle detector")
+        print(f"  Brightness filter: {'OFF' if args.no_brightness_filter else f'ON (min={args.min_brightness})'}")
         detector = HoughDetector(
             min_radius=args.min_radius,
             max_radius=args.max_radius,
-            param2=args.param2,
             min_brightness=args.min_brightness,
-            min_uniformity=args.min_uniformity,
             brightness_filter=not args.no_brightness_filter,
-            enhance_contrast=not args.no_contrast_enhance,
-            use_white_detection=args.white_detect,
         )
 
     # Initialize ByteTrack
@@ -667,14 +498,14 @@ def main():
     total_detections = 0
     unique_tracks = set()
 
-    def process_frame(frame: np.ndarray, frame_num: int, is_rgb: bool = False) -> Tuple[np.ndarray, int]:
+    def process_frame(frame: np.ndarray, frame_num: int) -> Tuple[np.ndarray, int]:
         """Process a single frame and return annotated result."""
         nonlocal total_detections
 
         start_time = time.time()
 
         # Detect balls
-        detections = detector.detect(frame, is_rgb=is_rgb)
+        detections = detector.detect(frame)
         total_detections += len(detections)
 
         if detections:
@@ -799,28 +630,10 @@ def main():
 
         print(f"Starting camera: {args.width}x{args.height} @ {args.fps}fps")
         camera = Picamera2()
-
-        # Build controls dict
-        controls = {"FrameRate": args.fps}
-
-        # Add white balance mode if specified
-        if args.awb:
-            # Map user-friendly names to libcamera AWB modes
-            awb_modes = {
-                "auto": 0,        # Auto
-                "daylight": 1,    # Daylight
-                "cloudy": 2,      # Cloudy
-                "tungsten": 3,    # Tungsten
-                "fluorescent": 4, # Fluorescent
-                "indoor": 5,      # Indoor
-            }
-            controls["AwbMode"] = awb_modes.get(args.awb, 0)
-            print(f"  White balance: {args.awb}")
-
         config = camera.create_video_configuration(
             main={"size": (args.width, args.height), "format": "RGB888"},
             buffer_count=2,
-            controls=controls
+            controls={"FrameRate": args.fps}
         )
         camera.configure(config)
         camera.start()
