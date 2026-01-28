@@ -13,15 +13,15 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
-from flask import Flask, send_from_directory, Response
-from flask_socketio import SocketIO
+from flask import Flask, Response, send_from_directory
 from flask_cors import CORS
+from flask_socketio import SocketIO
 
-from .launch_monitor import LaunchMonitor, Shot, ClubType
-from .ops243 import SpeedReading, Direction, set_show_raw_readings
-from .session_logger import init_session_logger, get_session_logger
+from .launch_monitor import ClubType, LaunchMonitor, Shot
+from .ops243 import Direction, SpeedReading, set_show_raw_readings
+from .session_logger import get_session_logger, init_session_logger
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Camera imports (optional)
 try:
     import cv2
-    import numpy as np
+
     from .camera_tracker import CameraTracker
     CV2_AVAILABLE = True
 except ImportError:
@@ -107,13 +107,15 @@ def static_files(path):
 
 # Camera functions
 def init_camera(
-    model_path: str = "models/golf_ball_yolo11n_new_256.onnx",
+    model_path: str = None,
     roboflow_model_id: str = None,
     roboflow_api_key: str = None,
     imgsz: int = 256,
+    use_hough: bool = True,  # Default to Hough detection
+    hough_param2: int = 27,  # Tuned sensitivity
 ):
-    """Initialize camera and ball tracker (YOLO or Roboflow)."""
-    global camera, camera_tracker  # pylint: disable=global-statement
+    """Initialize camera and ball tracker (Hough, YOLO, or Roboflow)."""
+    global camera, camera_tracker, camera_enabled  # pylint: disable=global-statement
 
     if not CV2_AVAILABLE:
         print("OpenCV not available - camera disabled")
@@ -128,37 +130,35 @@ def init_camera(
         camera = Picamera2()
         config = camera.create_video_configuration(
             main={"size": (640, 480), "format": "RGB888"},
-            buffer_count=1,  # Minimize latency
+            buffer_count=2,  # Balance between latency and stability
             controls={"FrameRate": 60}  # Higher FPS for ball tracking
         )
         camera.configure(config)
         camera.start()
         time.sleep(0.5)
 
-        # Initialize tracker - Roboflow or local YOLO
+        # Initialize tracker - default to Hough + ByteTrack
         if roboflow_model_id:
             camera_tracker = CameraTracker(
                 roboflow_model_id=roboflow_model_id,
                 roboflow_api_key=roboflow_api_key,
                 imgsz=imgsz,
+                use_hough=False,
             )
-            print(f"Camera initialized with Roboflow model: {roboflow_model_id}")
-        elif os.path.exists(model_path):
-            camera_tracker = CameraTracker(model_path=model_path, imgsz=imgsz)
-            print(f"Camera initialized with local model: {model_path} (imgsz={imgsz})")
+        elif not use_hough and model_path and os.path.exists(model_path):
+            camera_tracker = CameraTracker(
+                model_path=model_path,
+                imgsz=imgsz,
+                use_hough=False,
+            )
         else:
-            # Try default models (256 first, then fallbacks)
-            for fallback in ["models/golf_ball_yolo11n_new_256.onnx", "models/golf_ball_yolo11n_new.onnx", "yolov8n.pt"]:
-                if os.path.exists(fallback):
-                    # Use 256 imgsz for 256 model, 640 for others
-                    fallback_imgsz = 256 if "256" in fallback else 640
-                    camera_tracker = CameraTracker(model_path=fallback, imgsz=fallback_imgsz)
-                    print(f"Camera initialized with fallback model: {fallback} (imgsz={fallback_imgsz})")
-                    break
-            else:
-                print("No model found - detection disabled")
-                camera_tracker = None
+            camera_tracker = CameraTracker(
+                use_hough=True,
+                hough_param2=hough_param2,
+            )
 
+        # Auto-enable camera when initialized
+        camera_enabled = True
         return True
 
     except Exception as e:
@@ -573,24 +573,17 @@ def on_shot_detected(shot: Shot):
 
     print(f"[DEBUG] Shot callback triggered: {shot.ball_speed_mph:.1f} mph")
 
-    # Always emit the shot first, then try camera processing
-    # This ensures shots are recorded even if camera fails
-    try:
-        shot_data = shot_to_dict(shot)
-        stats = monitor.get_session_stats() if monitor else {}
-        socketio.emit("shot", {"shot": shot_data, "stats": stats})
-        print(f"[SHOT] Ball speed: {shot.ball_speed_mph:.1f} mph, Carry: {shot.estimated_carry_yards:.0f} yds")
-    except Exception as e:
-        print(f"[ERROR] Failed to emit shot: {e}")
-        return
-
-    # Now try to capture camera tracking data (optional)
+    # Try to get launch angle from camera BEFORE emitting shot
     camera_data = None
     try:
         if camera_tracker and camera_enabled:
             launch_angle = camera_tracker.calculate_launch_angle()
             if launch_angle:
-                # Update shot with launch angle data (for logging only, shot already emitted)
+                # Update shot object with launch angle data
+                shot.launch_angle_vertical = launch_angle.vertical
+                shot.launch_angle_horizontal = launch_angle.horizontal
+                shot.launch_angle_confidence = launch_angle.confidence
+
                 camera_data = {
                     "launch_angle_vertical": launch_angle.vertical,
                     "launch_angle_horizontal": launch_angle.horizontal,
@@ -598,7 +591,7 @@ def on_shot_detected(shot: Shot):
                     "positions_tracked": len(launch_angle.positions),
                     "launch_detected": camera_tracker.launch_detected,
                 }
-                print(f"[CAMERA] Launch angle: {launch_angle.vertical:.1f}° (conf: {launch_angle.confidence:.0%})")
+                print(f"[CAMERA] Launch angle: {launch_angle.vertical:.1f}° V, {launch_angle.horizontal:.1f}° H (conf: {launch_angle.confidence:.0%})")
 
                 # Log camera data to session logger
                 session_logger = get_session_logger()
@@ -619,6 +612,21 @@ def on_shot_detected(shot: Shot):
     except Exception as e:
         print(f"[WARN] Camera processing error: {e}")
         camera_data = None
+
+    # Emit shot with launch angle data included
+    try:
+        shot_data = shot_to_dict(shot)
+        stats = monitor.get_session_stats() if monitor else {}
+        socketio.emit("shot", {"shot": shot_data, "stats": stats})
+
+        # Log shot info
+        angle_str = ""
+        if shot.launch_angle_vertical is not None:
+            angle_str = f", Launch: {shot.launch_angle_vertical:.1f}°"
+        print(f"[SHOT] Ball speed: {shot.ball_speed_mph:.1f} mph, Carry: {shot.estimated_carry_yards:.0f} yds{angle_str}")
+    except Exception as e:
+        print(f"[ERROR] Failed to emit shot: {e}")
+        return
 
     # Debug logging (optional)
     try:
@@ -853,19 +861,23 @@ def main():
     parser.add_argument("--radar-log", action="store_true", help="Log raw radar data to console (Python logging)")
     parser.add_argument("--show-raw", action="store_true", help="Show raw radar readings in console (signed values)")
     parser.add_argument(
-        "--camera", "-c", action="store_true", help="Enable camera for ball detection"
+        "--no-camera", action="store_true", help="Disable camera (auto-enabled if available)"
     )
     parser.add_argument(
-        "--camera-model", default="models/golf_ball_yolo11n_new_256.onnx",
-        help="Path to YOLO model for ball detection"
+        "--camera-model", default=None,
+        help="Path to YOLO model for ball detection (uses Hough by default)"
     )
     parser.add_argument(
         "--camera-imgsz", type=int, default=256,
         help="YOLO inference input size (256 for speed, 640 for accuracy)"
     )
     parser.add_argument(
+        "--hough-param2", type=int, default=27,
+        help="Hough circle detection sensitivity (lower = more sensitive, default 27)"
+    )
+    parser.add_argument(
         "--roboflow-model",
-        help="Roboflow model ID (e.g., 'golfballdetector/10'). Uses Roboflow API instead of local YOLO."
+        help="Roboflow model ID (e.g., 'golfballdetector/10'). Uses Roboflow API instead of Hough."
     )
     parser.add_argument(
         "--roboflow-api-key",
@@ -947,21 +959,24 @@ def main():
         print("Running in MOCK mode - no radar required")
         print("Simulate shots via WebSocket or API")
 
-    # Initialize camera if requested
-    if args.camera:
+    # Initialize camera (auto-enabled unless --no-camera)
+    if not args.no_camera:
+        # Determine if we should use Hough (default) or YOLO
+        use_hough = args.camera_model is None and args.roboflow_model is None
+
         if init_camera(
             model_path=args.camera_model,
             roboflow_model_id=args.roboflow_model,
             roboflow_api_key=args.roboflow_api_key,
             imgsz=args.camera_imgsz,
+            use_hough=use_hough,
+            hough_param2=args.hough_param2,
         ):
             start_camera_thread()
-            if args.roboflow_model:
-                print(f"Camera enabled with Roboflow model: {args.roboflow_model}")
-            else:
-                print(f"Camera enabled with local model: {args.camera_model} (imgsz={args.camera_imgsz})")
         else:
-            print("Camera initialization failed - running without camera")
+            print("Camera not available - running without camera")
+    else:
+        print("Camera disabled by --no-camera flag")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

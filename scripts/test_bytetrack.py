@@ -89,7 +89,7 @@ class HoughDetector:
         min_radius: int = 5,
         max_radius: int = 50,
         param1: int = 50,
-        param2: int = 20,  # Lower = more sensitive (was 30)
+        param2: int = 27,  # Lower = more sensitive
         min_dist: int = 50
     ):
         self.min_radius = min_radius
@@ -266,7 +266,7 @@ def main():
     # Hough settings
     parser.add_argument("--min-radius", type=int, default=5, help="Min circle radius")
     parser.add_argument("--max-radius", type=int, default=50, help="Max circle radius")
-    parser.add_argument("--param2", type=int, default=20, help="Hough sensitivity (lower=more sensitive)")
+    parser.add_argument("--param2", type=int, default=27, help="Hough sensitivity (lower=more sensitive)")
 
     # ByteTrack settings
     parser.add_argument("--track-buffer", type=int, default=30,

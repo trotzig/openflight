@@ -1,16 +1,31 @@
 """
 Camera-based ball tracking for launch angle detection.
 
-Uses YOLO or Roboflow to detect the golf ball across multiple frames and
-calculates launch angle from the trajectory.
+Uses Hough circle detection with ByteTrack for persistent tracking,
+or optionally YOLO/Roboflow for detection. Calculates launch angle
+from the ball trajectory.
 """
 
 import math
 import os
 import time
-from dataclasses import dataclass
-from typing import Optional, List
 from collections import deque
+from dataclasses import dataclass
+from typing import List, Optional
+
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+try:
+    import supervision as sv
+    from trackers import ByteTrackTracker
+    BYTETRACK_AVAILABLE = True
+except ImportError:
+    BYTETRACK_AVAILABLE = False
 
 try:
     from ultralytics import YOLO
@@ -24,22 +39,16 @@ try:
 except ImportError:
     ROBOFLOW_AVAILABLE = False
 
-try:
-    import cv2
-    import numpy as np
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-
 
 @dataclass
 class BallPosition:
     """A detected ball position in a frame."""
-    x: int  # pixels from left
-    y: int  # pixels from top
-    radius: int  # estimated ball radius in pixels
+    x: int
+    y: int
+    radius: int
     confidence: float
     timestamp: float
+    track_id: Optional[int] = None
 
 
 @dataclass
@@ -47,372 +56,366 @@ class LaunchAngle:
     """Calculated launch angle from ball trajectory."""
     vertical: float  # degrees, positive = up
     horizontal: float  # degrees, positive = right of target
-    confidence: float  # 0-1, based on detection quality
-    positions: List[BallPosition]  # positions used for calculation
+    confidence: float  # 0-1
+    positions: List[BallPosition]
+
+
+class HoughDetector:
+    """Detect balls using Hough Circle Transform."""
+
+    def __init__(
+        self,
+        min_radius: int = 5,
+        max_radius: int = 50,
+        param1: int = 50,
+        param2: int = 27,
+        min_dist: int = 50
+    ):
+        self.min_radius = min_radius
+        self.max_radius = max_radius
+        self.param1 = param1
+        self.param2 = param2
+        self.min_dist = min_dist
+
+    def detect(self, frame: np.ndarray) -> List[dict]:
+        """Detect circles in frame, return list of detections."""
+        if len(frame.shape) == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
+
+        blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1,
+            minDist=self.min_dist,
+            param1=self.param1,
+            param2=self.param2,
+            minRadius=self.min_radius,
+            maxRadius=self.max_radius
+        )
+
+        detections = []
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            for circle in circles[0, :]:
+                x, y, r = circle
+                detections.append({
+                    'x': float(x),
+                    'y': float(y),
+                    'radius': float(r),
+                    'confidence': 0.8
+                })
+
+        return detections
 
 
 class CameraTracker:
     """
-    Tracks golf ball using YOLO and calculates launch angle.
+    Tracks golf ball using Hough circles + ByteTrack and calculates launch angle.
 
     Camera is positioned BEHIND the ball, looking down the target line.
-    This allows us to see both vertical and horizontal launch angles
-    directly from ball movement in the frame.
-
-    Coordinate system (from camera's perspective):
-    - Origin: Ball position at address (tee) - center of frame
-    - X: Left/right in frame (positive = right, ball going right of target)
-    - Y: Up/down in frame (positive = up, ball launching upward)
-    - Z: Depth (ball moving away = getting smaller in frame)
-
-    Vertical launch angle: arctan(Y movement / Z movement)
-    Horizontal launch angle: arctan(X movement / Z movement)
-
-    We estimate Z (depth) from ball size change - ball getting smaller
-    means it's moving away from the camera toward the target.
+    - X: Left/right in frame (positive = right of target)
+    - Y: Up/down in frame (positive = up, launching upward)
+    - Z: Depth estimated from ball size change (getting smaller = moving away)
     """
 
-    # Detection settings
-    MIN_CONFIDENCE = 0.3
-    BALL_CLASS_NAME = "golf-ball"  # For fine-tuned model
-    SPORTS_BALL_CLASS = 32  # COCO class for generic model
+    MAX_POSITIONS = 30
+    MIN_POSITIONS_FOR_ANGLE = 3
+    POSITION_TIMEOUT = 0.5  # seconds
 
-    # Tracking settings
-    MAX_POSITIONS = 10  # Max positions to store
-    MIN_POSITIONS_FOR_ANGLE = 2  # Minimum positions to calculate angle
-    POSITION_TIMEOUT = 0.5  # Seconds before clearing old positions
+    # ByteTrack defaults
+    _TRACK_BUFFER = 30
+    _TRACK_ACTIVATION = 0.5
+    _TRACK_MIN_IOU = 0.1
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
-        camera_height_inches: float = 12,
+        model_path: str = None,
         camera_distance_inches: float = 48,
-        camera_angle_degrees: float = 0,
         frame_width: int = 640,
-        frame_height: int = 480,
         roboflow_api_key: Optional[str] = None,
         roboflow_model_id: Optional[str] = None,
         imgsz: int = 256,
+        use_hough: bool = True,
+        hough_param2: int = 27,
     ):
-        """
-        Initialize the camera tracker.
-
-        Args:
-            model_path: Path to YOLO model (.pt or NCNN folder)
-            camera_height_inches: Height of camera lens above ground
-            camera_distance_inches: Distance from camera to ball (perpendicular)
-            camera_angle_degrees: Camera tilt angle (0 = level, positive = tilted up)
-            frame_width: Camera frame width in pixels
-            frame_height: Camera frame height in pixels
-            roboflow_api_key: Roboflow API key (uses Roboflow if provided)
-            roboflow_model_id: Roboflow model ID (e.g., "golfballdetector/10")
-            imgsz: YOLO inference input size (256 for speed, 640 for accuracy)
-        """
         if not CV2_AVAILABLE:
             raise ImportError("opencv required: pip install opencv-python")
 
-        # Determine which backend to use
+        self.use_hough = use_hough
         self.use_roboflow = roboflow_model_id is not None
         self.model = None
         self.roboflow_client = None
         self.roboflow_model_id = roboflow_model_id
-        self.model_path = model_path
-
-        # Store inference settings
         self.imgsz = imgsz
 
-        if self.use_roboflow:
-            if not ROBOFLOW_AVAILABLE:
-                raise ImportError("inference-sdk required: pip install inference-sdk")
+        self.hough_detector = HoughDetector(param2=hough_param2)
+        self.tracker = self._create_tracker() if BYTETRACK_AVAILABLE else None
 
-            # Get API key from parameter or environment
-            api_key = roboflow_api_key or os.environ.get("ROBOFLOW_API_KEY")
-
-            self.roboflow_client = InferenceHTTPClient(
-                api_url="https://detect.roboflow.com",
-                api_key=api_key,
-            )
-            print(f"Using Roboflow model: {roboflow_model_id}")
-        else:
-            if not YOLO_AVAILABLE:
-                raise ImportError("ultralytics required: pip install ultralytics")
-            self.model = YOLO(model_path)
-            print(f"Using local YOLO model: {model_path} (imgsz={imgsz})")
+        # Initialize YOLO/Roboflow if not using Hough
+        if not use_hough:
+            if self.use_roboflow:
+                if not ROBOFLOW_AVAILABLE:
+                    raise ImportError("inference-sdk required")
+                api_key = roboflow_api_key or os.environ.get("ROBOFLOW_API_KEY")
+                self.roboflow_client = InferenceHTTPClient(
+                    api_url="https://detect.roboflow.com",
+                    api_key=api_key,
+                )
+            elif model_path and YOLO_AVAILABLE:
+                self.model = YOLO(model_path)
+            else:
+                self.use_hough = True
 
         # Camera calibration
-        self.camera_height = camera_height_inches
         self.camera_distance = camera_distance_inches
-        self.camera_angle = camera_angle_degrees
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-
-        # Estimate pixels per inch at ball distance
-        # Rough approximation - proper calibration would use checkerboard
-        # Assuming ~60 degree FOV for typical Pi camera
-        fov_horizontal = 62  # degrees
-        view_width_at_distance = 2 * camera_distance_inches * math.tan(math.radians(fov_horizontal / 2))
-        self.pixels_per_inch = frame_width / view_width_at_distance
+        fov_horizontal = 62  # degrees (typical Pi camera)
+        view_width = 2 * camera_distance_inches * math.tan(math.radians(fov_horizontal / 2))
+        self.pixels_per_inch = frame_width / view_width
 
         # Tracking state
         self.positions: deque = deque(maxlen=self.MAX_POSITIONS)
         self.last_detection_time: float = 0
-        self.is_tracking: bool = False
-
-        # For detecting launch (ball moving fast)
         self.launch_detected: bool = False
         self.launch_positions: List[BallPosition] = []
+        self.launch_velocity_threshold = 300  # pixels/second
+
+    def _create_tracker(self):
+        """Create a new ByteTrack tracker instance."""
+        return ByteTrackTracker(
+            lost_track_buffer=self._TRACK_BUFFER,
+            track_activation_threshold=self._TRACK_ACTIVATION,
+            minimum_iou_threshold=self._TRACK_MIN_IOU,
+        )
 
     def process_frame(self, frame: np.ndarray) -> Optional[BallPosition]:
-        """
-        Process a frame and detect ball position.
-
-        Args:
-            frame: RGB image from camera
-
-        Returns:
-            BallPosition if ball detected, None otherwise
-        """
+        """Process a frame and return detected ball position."""
         now = time.time()
 
         # Clear old positions if too much time has passed
         if self.positions and (now - self.last_detection_time) > self.POSITION_TIMEOUT:
-            self.positions.clear()
-            self.launch_detected = False
-            self.launch_positions = []
+            self._reset_tracking_state()
 
-        # Run detection based on backend
-        ball_detections = []
-
-        if self.use_roboflow:
-            ball_detections = self._detect_roboflow(frame, now)
+        # Run detection
+        if self.use_hough:
+            detections = self.hough_detector.detect(frame)
+        elif self.use_roboflow:
+            detections = self._detect_roboflow(frame)
         else:
-            ball_detections = self._detect_yolo(frame, now)
+            detections = self._detect_yolo(frame)
 
-        if not ball_detections:
+        if not detections:
             return None
 
-        # Use highest confidence detection
-        best = max(ball_detections, key=lambda b: b.confidence)
+        # Apply ByteTrack if available
+        best = self._apply_tracking(detections)
+        if not best:
+            return None
 
-        # Add to tracking
-        self.positions.append(best)
+        position = BallPosition(
+            x=int(best['x']),
+            y=int(best['y']),
+            radius=int(best['radius']),
+            confidence=best['confidence'],
+            timestamp=now,
+            track_id=best.get('track_id')
+        )
+
+        self.positions.append(position)
         self.last_detection_time = now
+        self._check_launch(position)
 
-        # Check for launch (sudden movement)
-        if len(self.positions) >= 2:
-            prev = self.positions[-2]
-            curr = self.positions[-1]
-            dt = curr.timestamp - prev.timestamp
+        return position
 
-            if dt > 0:
-                # Calculate velocity in pixels/second
-                dx = curr.x - prev.x
-                dy = prev.y - curr.y  # Invert Y (image coords are top-down)
-                velocity = math.sqrt(dx*dx + dy*dy) / dt
+    def _apply_tracking(self, detections: List[dict]) -> Optional[dict]:
+        """Apply ByteTrack to detections, or pick best detection if unavailable."""
+        if self.tracker and BYTETRACK_AVAILABLE:
+            xyxy = np.array([
+                [d['x'] - d['radius'], d['y'] - d['radius'],
+                 d['x'] + d['radius'], d['y'] + d['radius']]
+                for d in detections
+            ])
+            sv_detections = sv.Detections(
+                xyxy=xyxy,
+                confidence=np.array([d['confidence'] for d in detections]),
+                class_id=np.zeros(len(detections), dtype=int)
+            )
 
-                # If ball is moving fast (>500 pixels/sec), it's launching
-                if velocity > 500 and not self.launch_detected:
-                    self.launch_detected = True
-                    self.launch_positions = [prev, curr]
-                elif self.launch_detected and len(self.launch_positions) < 5:
-                    self.launch_positions.append(curr)
+            tracked = self.tracker.update(sv_detections)
+            if len(tracked) == 0:
+                return None
 
+            bbox = tracked.xyxy[0]
+            return {
+                'x': (bbox[0] + bbox[2]) / 2,
+                'y': (bbox[1] + bbox[3]) / 2,
+                'radius': (bbox[2] - bbox[0]) / 2,
+                'confidence': tracked.confidence[0] if tracked.confidence is not None else 0.8,
+                'track_id': int(tracked.tracker_id[0]) if tracked.tracker_id is not None else 0,
+            }
+
+        # No tracking - use highest confidence detection
+        best = max(detections, key=lambda d: d['confidence'])
+        best['track_id'] = None
         return best
 
-    def _detect_yolo(self, frame: np.ndarray, timestamp: float) -> List[BallPosition]:
-        """Run YOLO detection on frame."""
-        ball_detections = []
+    def _check_launch(self, current: BallPosition):
+        """Check if ball has been launched based on velocity."""
+        if len(self.positions) < 2:
+            return
 
-        results = self.model(frame, conf=self.MIN_CONFIDENCE, imgsz=self.imgsz, verbose=False)
+        prev = self.positions[-2]
+        dt = current.timestamp - prev.timestamp
+        if dt <= 0:
+            return
+
+        dx = current.x - prev.x
+        dy = prev.y - current.y  # Invert Y (image coords are top-down)
+        velocity = math.sqrt(dx*dx + dy*dy) / dt
+
+        if velocity > self.launch_velocity_threshold and not self.launch_detected:
+            self.launch_detected = True
+            self.launch_positions = [prev, current]
+        elif self.launch_detected and len(self.launch_positions) < 10:
+            self.launch_positions.append(current)
+
+    def _detect_yolo(self, frame: np.ndarray) -> List[dict]:
+        """Run YOLO detection on frame."""
+        if not self.model:
+            return []
+
+        results = self.model(frame, conf=0.3, imgsz=self.imgsz, verbose=False)
+        detections = []
 
         for r in results:
             for box in r.boxes:
                 cls = int(box.cls[0])
-                conf = float(box.conf[0])
                 class_name = self.model.names[cls]
 
-                # Check if it's a ball (works with fine-tuned or generic model)
-                is_ball = (
-                    cls == self.SPORTS_BALL_CLASS or
-                    'ball' in class_name.lower() or
-                    'golf' in class_name.lower()
-                )
-
-                if is_ball:
+                if cls == 32 or 'ball' in class_name.lower() or 'golf' in class_name.lower():
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    cx = int((x1 + x2) / 2)
-                    cy = int((y1 + y2) / 2)
-                    radius = int((x2 - x1 + y2 - y1) / 4)
+                    detections.append({
+                        'x': (x1 + x2) / 2,
+                        'y': (y1 + y2) / 2,
+                        'radius': (x2 - x1 + y2 - y1) / 4,
+                        'confidence': float(box.conf[0])
+                    })
 
-                    ball_detections.append(BallPosition(
-                        x=cx,
-                        y=cy,
-                        radius=radius,
-                        confidence=conf,
-                        timestamp=timestamp
-                    ))
+        return detections
 
-        return ball_detections
-
-    def _detect_roboflow(self, frame: np.ndarray, timestamp: float) -> List[BallPosition]:
+    def _detect_roboflow(self, frame: np.ndarray) -> List[dict]:
         """Run Roboflow detection on frame."""
-        ball_detections = []
+        if not self.roboflow_client:
+            return []
 
         try:
-            # Encode frame as JPEG for API
             _, buffer = cv2.imencode('.jpg', frame)
-            image_bytes = buffer.tobytes()
+            result = self.roboflow_client.infer(buffer.tobytes(), model_id=self.roboflow_model_id)
 
-            # Run inference via Roboflow API
-            result = self.roboflow_client.infer(image_bytes, model_id=self.roboflow_model_id)
-
-            # Parse predictions
-            predictions = result.get('predictions', [])
-            for pred in predictions:
-                conf = pred.get('confidence', 0)
-                if conf < self.MIN_CONFIDENCE:
-                    continue
-
-                # Get bounding box (Roboflow returns center + width/height)
-                cx = int(pred.get('x', 0))
-                cy = int(pred.get('y', 0))
-                width = int(pred.get('width', 0))
-                height = int(pred.get('height', 0))
-                radius = int((width + height) / 4)
-
-                ball_detections.append(BallPosition(
-                    x=cx,
-                    y=cy,
-                    radius=radius,
-                    confidence=conf,
-                    timestamp=timestamp
-                ))
-
+            return [
+                {
+                    'x': pred.get('x', 0),
+                    'y': pred.get('y', 0),
+                    'radius': (pred.get('width', 0) + pred.get('height', 0)) / 4,
+                    'confidence': pred.get('confidence', 0)
+                }
+                for pred in result.get('predictions', [])
+                if pred.get('confidence', 0) >= 0.3
+            ]
         except Exception as e:
             print(f"Roboflow detection error: {e}")
+            return []
 
-        return ball_detections
+    def _compute_angles(self, dx_pixels: float, dy_pixels: float, dz: float):
+        """Convert pixel displacement to launch angles in degrees."""
+        dx_inches = dx_pixels / self.pixels_per_inch
+        dy_inches = dy_pixels / self.pixels_per_inch
+        return (
+            math.degrees(math.atan2(dy_inches, dz)),
+            math.degrees(math.atan2(dx_inches, dz)),
+        )
 
     def calculate_launch_angle(self) -> Optional[LaunchAngle]:
-        """
-        Calculate launch angle from tracked positions.
-
-        With camera BEHIND the ball looking down target line:
-        - Vertical angle: How much the ball moves UP in frame vs. away (size decrease)
-        - Horizontal angle: How much the ball moves LEFT/RIGHT in frame vs. away
-
-        Returns:
-            LaunchAngle if enough data, None otherwise
-        """
-        # Use launch positions if we detected a launch, otherwise use recent positions
+        """Calculate launch angle from tracked positions."""
         positions = self.launch_positions if self.launch_positions else list(self.positions)
 
         if len(positions) < self.MIN_POSITIONS_FOR_ANGLE:
             return None
 
-        # Use first and last position for angle calculation
         start = positions[0]
         end = positions[-1]
 
-        # Calculate pixel displacement in frame
-        # X: positive = ball moving right in frame (right of target)
-        # Y: positive = ball moving up in frame (launching upward)
         dx_pixels = end.x - start.x
-        dy_pixels = start.y - end.y  # Invert because image Y is top-down
+        dy_pixels = start.y - end.y  # Invert Y
 
-        # Estimate depth (Z) movement from ball size change
-        # Ball getting smaller = moving away from camera
-        # Use golf ball diameter (1.68") as reference
+        # Estimate depth from ball size change
+        dz = 0.0
         if start.radius > 5 and end.radius > 5:
-            # Ratio of size change indicates how far ball traveled
             size_ratio = end.radius / start.radius
+            if size_ratio < 0.95:
+                dz = self.camera_distance * (start.radius / end.radius - 1)
 
-            if size_ratio < 0.95:  # Ball is moving away
-                # Estimate distance traveled based on size decrease
-                # If ball is half the size, it's roughly twice as far
-                # This is approximate - proper calibration would be better
-                distance_ratio = start.radius / end.radius
-                dz_estimated = self.camera_distance * (distance_ratio - 1)
-            else:
-                # Ball hasn't moved away much, can't calculate angles reliably
-                dz_estimated = 0
-        else:
-            dz_estimated = 0
-
-        # Calculate angles
-        # Need some forward movement to calculate angles
-        if dz_estimated > 1:  # At least 1 inch of forward movement
-            # Convert pixel displacement to inches at the starting distance
-            dx_inches = dx_pixels / self.pixels_per_inch
-            dy_inches = dy_pixels / self.pixels_per_inch
-
-            # Vertical launch angle: arctan(rise / run)
-            vertical_angle = math.degrees(math.atan2(dy_inches, dz_estimated))
-
-            # Horizontal launch angle: arctan(horizontal deviation / run)
-            # Positive = right of target, Negative = left of target
-            horizontal_angle = math.degrees(math.atan2(dx_inches, dz_estimated))
-        else:
-            # Fallback: estimate from frame movement alone
-            # Less accurate but better than nothing
-            # Assume typical forward distance based on time between frames
+        # Fallback: estimate depth from elapsed time + assumed ball speed
+        if dz <= 1:
             dt = end.timestamp - start.timestamp
             if dt > 0:
-                # Assume ball traveling ~150mph = ~2640 inches/sec
-                estimated_ball_speed_ips = 2640
-                dz_estimated = estimated_ball_speed_ips * dt
-
-                dx_inches = dx_pixels / self.pixels_per_inch
-                dy_inches = dy_pixels / self.pixels_per_inch
-
-                vertical_angle = math.degrees(math.atan2(dy_inches, dz_estimated))
-                horizontal_angle = math.degrees(math.atan2(dx_inches, dz_estimated))
+                dz = 2640 * dt  # ~150mph in inches/sec
             else:
-                vertical_angle = 0
-                horizontal_angle = 0
+                return None
 
-        # Calculate confidence based on:
-        # - Number of positions tracked
-        # - Detection confidence
-        # - Whether we got good size-based depth estimate
+        vertical, horizontal = self._compute_angles(dx_pixels, dy_pixels, dz)
+
+        # Confidence from position count, detection quality, and depth estimation
         position_conf = min(1.0, len(positions) / 5)
         detection_conf = min(1.0, (end.confidence + start.confidence) / 2 / 0.5)
-        depth_conf = 1.0 if dz_estimated > 1 else 0.5
+        depth_conf = 1.0 if dz > 1 else 0.5
         confidence = position_conf * detection_conf * depth_conf
 
         return LaunchAngle(
-            vertical=round(vertical_angle, 1),
-            horizontal=round(horizontal_angle, 1),
+            vertical=round(vertical, 1),
+            horizontal=round(horizontal, 1),
             confidence=round(confidence, 2),
             positions=positions.copy()
         )
 
-    def reset(self):
-        """Clear tracking state for new shot."""
+    def _reset_tracking_state(self):
+        """Reset all tracking state."""
         self.positions.clear()
         self.launch_detected = False
         self.launch_positions = []
+        if self.tracker and BYTETRACK_AVAILABLE:
+            self.tracker = self._create_tracker()
+
+    def reset(self):
+        """Clear tracking state for new shot."""
+        self._reset_tracking_state()
         self.last_detection_time = 0
 
     def get_debug_frame(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Draw debug overlay on frame showing detections and trajectory.
-
-        Args:
-            frame: Original RGB frame
-
-        Returns:
-            Frame with debug overlay
-        """
+        """Draw debug overlay on frame showing detections and trajectory."""
         display = frame.copy()
 
-        # Draw all tracked positions
+        colors = [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255),
+            (255, 255, 0), (255, 0, 255), (0, 255, 255)
+        ]
+
         for i, pos in enumerate(self.positions):
-            # Color from red (old) to green (new)
-            t = i / max(1, len(self.positions) - 1)
-            color = (int(255 * (1-t)), int(255 * t), 0)
+            if pos.track_id is not None:
+                color = colors[pos.track_id % len(colors)]
+            else:
+                t = i / max(1, len(self.positions) - 1)
+                color = (int(255 * (1-t)), int(255 * t), 0)
+
             cv2.circle(display, (pos.x, pos.y), pos.radius, color, 2)
             cv2.circle(display, (pos.x, pos.y), 3, color, -1)
+
+            if pos.track_id is not None:
+                cv2.putText(display, f"ID:{pos.track_id}", (pos.x + 5, pos.y - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         # Draw trajectory line
         if len(self.positions) >= 2:
@@ -423,11 +426,12 @@ class CameraTracker:
         # Show launch angle if calculated
         angle = self.calculate_launch_angle()
         if angle:
-            text = f"Launch: {angle.vertical:.1f}° (conf: {angle.confidence:.0%})"
-            cv2.putText(display, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display, f"Launch: {angle.vertical:.1f} V, {angle.horizontal:.1f} H",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display, f"Confidence: {angle.confidence:.0%}",
+                       (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        # Show tracking status
         status = "LAUNCH DETECTED" if self.launch_detected else f"Tracking: {len(self.positions)} positions"
-        cv2.putText(display, status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        cv2.putText(display, status, (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
         return display

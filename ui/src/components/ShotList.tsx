@@ -14,6 +14,8 @@ interface ShotRowProps {
 }
 
 const ShotRow = memo(function ShotRow({ shot, shotNumber }: ShotRowProps) {
+  const hasLaunchAngle = shot.launch_angle_vertical !== null;
+
   return (
     <div className="shot-row">
       <span className="shot-row__number">#{shotNumber}</span>
@@ -22,10 +24,17 @@ const ShotRow = memo(function ShotRow({ shot, shotNumber }: ShotRowProps) {
         <span className="shot-row__value">{shot.ball_speed_mph.toFixed(1)}</span>
         <span className="shot-row__label">mph</span>
       </span>
-      <span className="shot-row__stat">
-        <span className="shot-row__value">{shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '--'}</span>
-        <span className="shot-row__label">club</span>
-      </span>
+      {hasLaunchAngle ? (
+        <span className="shot-row__stat">
+          <span className="shot-row__value">{shot.launch_angle_vertical!.toFixed(1)}°</span>
+          <span className="shot-row__label">launch</span>
+        </span>
+      ) : (
+        <span className="shot-row__stat">
+          <span className="shot-row__value">{shot.club_speed_mph ? shot.club_speed_mph.toFixed(1) : '--'}</span>
+          <span className="shot-row__label">club</span>
+        </span>
+      )}
       <span className="shot-row__stat">
         <span className="shot-row__value">{shot.smash_factor ? shot.smash_factor.toFixed(2) : '--'}</span>
         <span className="shot-row__label">smash</span>

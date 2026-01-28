@@ -164,6 +164,15 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
   }
 
   const hasSpin = shot.spin_rpm !== null;
+  const hasLaunchAngle = shot.launch_angle_vertical !== null;
+
+  // Convert launch angle confidence to quality tier
+  const getLaunchAngleQuality = (confidence: number | null): 'high' | 'medium' | 'low' | null => {
+    if (confidence === null) return null;
+    if (confidence >= 0.7) return 'high';
+    if (confidence >= 0.4) return 'medium';
+    return 'low';
+  };
 
   return (
     <div className={`shot-display ${isLatest ? 'shot-display--latest' : ''}`}>
@@ -182,7 +191,16 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
             subtext={carrySubtext}
             variant="primary"
           />
-          {hasSpin ? (
+          {hasLaunchAngle ? (
+            <MetricCard
+              value={shot.launch_angle_vertical!.toFixed(1)}
+              unit="°"
+              label="Launch Angle"
+              subtext={shot.launch_angle_horizontal !== null ? `${shot.launch_angle_horizontal > 0 ? '+' : ''}${shot.launch_angle_horizontal.toFixed(1)}° H` : undefined}
+              variant="secondary"
+              confidence={getLaunchAngleQuality(shot.launch_angle_confidence)}
+            />
+          ) : hasSpin ? (
             <MetricCard
               value={formatSpinRpm(shot.spin_rpm!)}
               unit="rpm"

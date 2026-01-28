@@ -7,6 +7,10 @@ export interface Shot {
   club: string;
   timestamp: string;
   peak_magnitude: number | null;
+  // Camera-based launch angle data
+  launch_angle_vertical: number | null;
+  launch_angle_horizontal: number | null;
+  launch_angle_confidence: number | null;
   // Rolling buffer mode spin data
   spin_rpm: number | null;
   spin_confidence: number | null;
