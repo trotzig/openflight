@@ -86,12 +86,13 @@ class HoughDetector:
 
     def __init__(
         self,
-        min_radius: int = 5,
-        max_radius: int = 50,
+        min_radius: int = 8,
+        max_radius: int = 40,
         param1: int = 50,
-        param2: int = 20,  # Lower = more sensitive (was 30)
-        min_dist: int = 30,  # Lower = detect closer circles (was 50)
-        min_brightness: int = 100,
+        param2: int = 25,  # Balance between sensitivity and noise
+        min_dist: int = 40,
+        min_brightness: int = 140,  # Golf balls are WHITE
+        min_uniformity: float = 0.7,  # How uniform the circle brightness is
         brightness_filter: bool = True,
         enhance_contrast: bool = True,
     ):
@@ -101,6 +102,7 @@ class HoughDetector:
         self.param2 = param2
         self.min_dist = min_dist
         self.min_brightness = min_brightness
+        self.min_uniformity = min_uniformity
         self.brightness_filter = brightness_filter
         self.enhance_contrast = enhance_contrast
 
@@ -110,13 +112,15 @@ class HoughDetector:
         if len(frame.shape) == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
-            gray = frame
+            gray = frame.copy()
+
+        # Keep original for brightness checking (before CLAHE)
+        gray_original = gray.copy()
 
         h, w = gray.shape[:2]
 
-        # Enhance contrast to help detect ball against similar backgrounds
+        # Enhance contrast for edge detection only
         if self.enhance_contrast:
-            # CLAHE (Contrast Limited Adaptive Histogram Equalization)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             gray = clahe.apply(gray)
 
@@ -145,21 +149,35 @@ class HoughDetector:
                 if x - r < 0 or x + r >= w or y - r < 0 or y + r >= h:
                     continue
 
-                # FILTER 1: Brightness check - golf balls are white/bright
                 if self.brightness_filter:
-                    # Sample the center region of the detection
-                    sample_r = max(2, r // 2)
-                    roi = gray[y - sample_r:y + sample_r, x - sample_r:x + sample_r]
-                    if roi.size > 0:
-                        center_brightness = np.mean(roi)
-                        if center_brightness < self.min_brightness:
-                            continue  # Too dark, not a golf ball
+                    # Use ORIGINAL image for brightness (not CLAHE enhanced)
+                    # Create circular mask for the detection
+                    mask = np.zeros((2*r, 2*r), dtype=np.uint8)
+                    cv2.circle(mask, (r, r), r, 255, -1)
 
-                        # Calculate confidence based on brightness (brighter = higher confidence)
-                        # Golf balls should be very bright (200+)
-                        confidence = min(1.0, center_brightness / 255.0)
-                    else:
-                        confidence = 0.5
+                    # Extract ROI
+                    roi = gray_original[y-r:y+r, x-r:x+r]
+                    if roi.shape[0] != 2*r or roi.shape[1] != 2*r:
+                        continue
+
+                    # Get pixels inside the circle
+                    circle_pixels = roi[mask == 255]
+                    if len(circle_pixels) == 0:
+                        continue
+
+                    # Check brightness
+                    mean_brightness = np.mean(circle_pixels)
+                    if mean_brightness < self.min_brightness:
+                        continue  # Too dark
+
+                    # Check uniformity - golf balls are solid white, not edges/gradients
+                    std_brightness = np.std(circle_pixels)
+                    uniformity = 1.0 - (std_brightness / 128.0)  # Lower std = more uniform
+                    if uniformity < self.min_uniformity:
+                        continue  # Too varied, probably an edge or texture
+
+                    # Confidence based on brightness and uniformity
+                    confidence = (mean_brightness / 255.0) * uniformity
                 else:
                     confidence = 0.8
 
@@ -413,14 +431,16 @@ def main():
     parser.add_argument("--confidence", type=float, default=0.3, help="Detection confidence")
 
     # Hough settings
-    parser.add_argument("--min-radius", type=int, default=5, help="Min circle radius")
-    parser.add_argument("--max-radius", type=int, default=50, help="Max circle radius")
-    parser.add_argument("--param2", type=int, default=20,
-                       help="Hough sensitivity (lower=more detections, default 20)")
-    parser.add_argument("--min-brightness", type=int, default=100,
-                       help="Min brightness for golf ball (0-255, golf balls are bright/white)")
+    parser.add_argument("--min-radius", type=int, default=8, help="Min circle radius")
+    parser.add_argument("--max-radius", type=int, default=40, help="Max circle radius")
+    parser.add_argument("--param2", type=int, default=25,
+                       help="Hough sensitivity (lower=more detections)")
+    parser.add_argument("--min-brightness", type=int, default=140,
+                       help="Min brightness for golf ball (0-255, golf balls are WHITE)")
+    parser.add_argument("--min-uniformity", type=float, default=0.7,
+                       help="Min uniformity (0-1, golf balls are solid, not edges)")
     parser.add_argument("--no-brightness-filter", action="store_true",
-                       help="Disable brightness filtering")
+                       help="Disable brightness/uniformity filtering")
     parser.add_argument("--no-contrast-enhance", action="store_true",
                        help="Disable contrast enhancement (CLAHE)")
 
@@ -468,12 +488,16 @@ def main():
         print("Using Hough Circle detector")
         print(f"  Contrast enhancement: {'OFF' if args.no_contrast_enhance else 'ON (CLAHE)'}")
         print(f"  Sensitivity (param2): {args.param2} (lower=more sensitive)")
-        print(f"  Brightness filter: {'OFF' if args.no_brightness_filter else f'ON (min={args.min_brightness})'}")
+        if not args.no_brightness_filter:
+            print(f"  Brightness filter: ON (min={args.min_brightness}, uniformity={args.min_uniformity})")
+        else:
+            print(f"  Brightness filter: OFF")
         detector = HoughDetector(
             min_radius=args.min_radius,
             max_radius=args.max_radius,
             param2=args.param2,
             min_brightness=args.min_brightness,
+            min_uniformity=args.min_uniformity,
             brightness_filter=not args.no_brightness_filter,
             enhance_contrast=not args.no_contrast_enhance,
         )
