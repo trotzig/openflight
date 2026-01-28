@@ -114,35 +114,25 @@ function MetricCard({
   );
 }
 
+function formatSpinRpm(rpm: number): string {
+  return rpm.toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | 'low' | null {
+  if (confidence === null) return null;
+  if (confidence >= 0.7) return 'high';
+  if (confidence >= 0.4) return 'medium';
+  return 'low';
+}
+
 export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
   const carryRange = useMemo(() => {
     if (!shot) return null;
     return `${shot.carry_range[0]}–${shot.carry_range[1]} yds`;
   }, [shot]);
 
-  // Use spin-adjusted carry when available
-  const displayCarry = useMemo(() => {
-    if (!shot) return 0;
-    return shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
-  }, [shot]);
-
-  const carryLabel = useMemo(() => {
-    if (!shot) return 'Est. Carry';
-    return shot.carry_spin_adjusted ? 'Est. Carry' : 'Est. Carry';
-  }, [shot]);
-
-  const carrySubtext = useMemo(() => {
-    if (!shot) return undefined;
-    if (shot.carry_spin_adjusted) {
-      return 'spin-adjusted';
-    }
-    return carryRange || undefined;
-  }, [shot, carryRange]);
-
-  // Format spin RPM with thousands separator
-  const formatSpinRpm = (rpm: number): string => {
-    return rpm.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  };
+  const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
+  const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
 
   if (!shot) {
     return (
@@ -166,14 +156,6 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
   const hasSpin = shot.spin_rpm !== null;
   const hasLaunchAngle = shot.launch_angle_vertical !== null;
 
-  // Convert launch angle confidence to quality tier
-  const getLaunchAngleQuality = (confidence: number | null): 'high' | 'medium' | 'low' | null => {
-    if (confidence === null) return null;
-    if (confidence >= 0.7) return 'high';
-    if (confidence >= 0.4) return 'medium';
-    return 'low';
-  };
-
   return (
     <div className={`shot-display ${isLatest ? 'shot-display--latest' : ''}`}>
       <div className="shot-display__layout">
@@ -187,7 +169,7 @@ export function ShotDisplay({ shot, isLatest = true }: ShotDisplayProps) {
           <MetricCard
             value={Math.round(displayCarry)}
             unit="yds"
-            label={carryLabel}
+            label="Est. Carry"
             subtext={carrySubtext}
             variant="primary"
           />

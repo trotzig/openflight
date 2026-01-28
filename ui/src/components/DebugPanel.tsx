@@ -126,22 +126,28 @@ interface SliderControlProps {
 
 function SliderControl({ label, value, min, max, step = 1, unit = '', disabled, onChange }: SliderControlProps) {
   const [localValue, setLocalValue] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
+  const [dragging, setDragging] = useState(false);
+
+  // Sync local value when prop changes (only when not dragging)
+  if (prevValue !== value) {
+    setPrevValue(value);
+    if (!dragging) {
+      setLocalValue(value);
+    }
+  }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = parseInt(e.target.value, 10);
-    setLocalValue(newValue);
+    setDragging(true);
+    setLocalValue(parseInt(e.target.value, 10));
   };
 
   const handleRelease = () => {
+    setDragging(false);
     if (localValue !== value) {
       onChange(localValue);
     }
   };
-
-  // Sync local value when prop changes
-  if (localValue !== value && !document.activeElement?.classList.contains('slider-control__input')) {
-    setLocalValue(value);
-  }
 
   return (
     <div className={`slider-control ${disabled ? 'slider-control--disabled' : ''}`}>

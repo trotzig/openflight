@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { Shot, SessionStats, SessionState } from '../types/shot';
 
@@ -46,7 +46,7 @@ export interface DebugShotLog {
 }
 
 export function useSocket() {
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [mockMode, setMockMode] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
@@ -60,8 +60,6 @@ export function useSocket() {
   });
   const [latestShot, setLatestShot] = useState<Shot | null>(null);
   const [shots, setShots] = useState<Shot[]>([]);
-  const [stats, setStats] = useState<SessionStats | null>(null);
-
   // Camera state
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>({
     available: false,
@@ -94,7 +92,7 @@ export function useSocket() {
         // Keep only last 200 shots in UI state to prevent memory issues
         return updated.length > 200 ? updated.slice(-200) : updated;
       });
-      setStats(data.stats);
+
     });
 
     newSocket.on('session_state', (data: SessionState & {
@@ -107,7 +105,7 @@ export function useSocket() {
     }) => {
       console.log('Session state received:', data);
       setShots(data.shots);
-      setStats(data.stats);
+
       if (data.mock_mode !== undefined) {
         setMockMode(data.mock_mode);
       }
@@ -172,53 +170,45 @@ export function useSocket() {
 
     newSocket.on('session_cleared', () => {
       setShots([]);
-      setStats(null);
       setLatestShot(null);
     });
 
-    setSocket(newSocket);
+    socketRef.current = newSocket;
 
     return () => {
       newSocket.close();
+      socketRef.current = null;
     };
   }, []);
 
   const clearSession = useCallback(() => {
-    socket?.emit('clear_session');
-  }, [socket]);
+    socketRef.current?.emit('clear_session');
+  }, []);
 
   const setClub = useCallback((club: string) => {
-    socket?.emit('set_club', { club });
-  }, [socket]);
+    socketRef.current?.emit('set_club', { club });
+  }, []);
 
   const simulateShot = useCallback(() => {
-    socket?.emit('simulate_shot');
-  }, [socket]);
+    socketRef.current?.emit('simulate_shot');
+  }, []);
 
   const toggleDebug = useCallback(() => {
-    socket?.emit('toggle_debug');
-  }, [socket]);
+    socketRef.current?.emit('toggle_debug');
+  }, []);
 
   const updateRadarConfig = useCallback((config: Partial<RadarConfig>) => {
-    socket?.emit('set_radar_config', config);
-  }, [socket]);
-
-  const getRadarConfig = useCallback(() => {
-    socket?.emit('get_radar_config');
-  }, [socket]);
+    socketRef.current?.emit('set_radar_config', config);
+  }, []);
 
   // Camera controls
   const toggleCamera = useCallback(() => {
-    socket?.emit('toggle_camera');
-  }, [socket]);
+    socketRef.current?.emit('toggle_camera');
+  }, []);
 
   const toggleCameraStream = useCallback(() => {
-    socket?.emit('toggle_camera_stream');
-  }, [socket]);
-
-  const getCameraStatus = useCallback(() => {
-    socket?.emit('get_camera_status');
-  }, [socket]);
+    socketRef.current?.emit('toggle_camera_stream');
+  }, []);
 
   return {
     connected,
@@ -229,16 +219,13 @@ export function useSocket() {
     radarConfig,
     latestShot,
     shots,
-    stats,
     cameraStatus,
     clearSession,
     setClub,
     simulateShot,
     toggleDebug,
     updateRadarConfig,
-    getRadarConfig,
     toggleCamera,
     toggleCameraStream,
-    getCameraStatus,
   };
 }

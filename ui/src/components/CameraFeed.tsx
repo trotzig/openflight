@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { CameraStatus } from '../hooks/useSocket';
 import './CameraFeed.css';
 
@@ -18,14 +18,16 @@ export function CameraFeed({
   onToggleStream,
 }: CameraFeedProps) {
   const [streamError, setStreamError] = useState(false);
+  const [prevStreaming, setPrevStreaming] = useState(false);
   const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
 
-  // Reset error when stream status changes
-  useEffect(() => {
-    if (streaming) {
-      setStreamError(false);
-    }
-  }, [streaming]);
+  // Reset error when streaming starts
+  if (streaming && !prevStreaming) {
+    setStreamError(false);
+  }
+  if (streaming !== prevStreaming) {
+    setPrevStreaming(streaming);
+  }
 
   if (!available) {
     return (

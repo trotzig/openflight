@@ -1,31 +1,38 @@
-import { useMemo } from 'react';
-import { useLaunchDaddy } from './LaunchDaddyContext';
+import { useState } from 'react';
+import { useLaunchDaddy } from './useLaunchDaddy';
 
-// Generate random particles for the explosion
-function generateParticles(count: number) {
+interface Particle {
+  id: number;
+  tx: number;
+  ty: number;
+  type: string;
+  delay: number;
+  duration: number;
+  startX: number;
+  startY: number;
+}
+
+function generateParticles(count: number): Particle[] {
   return Array.from({ length: count }, (_, i) => {
     const angle = (Math.random() * 360) * (Math.PI / 180);
     const distance = 100 + Math.random() * 400;
-    const tx = Math.cos(angle) * distance;
-    const ty = Math.sin(angle) * distance;
-    const type = ['fire', 'spark', 'ember'][Math.floor(Math.random() * 3)];
-    const delay = Math.random() * 0.3;
-    const duration = 0.8 + Math.random() * 0.7;
-
     return {
       id: i,
-      tx,
-      ty,
-      type,
-      delay,
-      duration,
-      startX: 45 + Math.random() * 10, // percentage
-      startY: 55 + Math.random() * 10, // percentage
+      tx: Math.cos(angle) * distance,
+      ty: Math.sin(angle) * distance,
+      type: ['fire', 'spark', 'ember'][Math.floor(Math.random() * 3)],
+      delay: Math.random() * 0.3,
+      duration: 0.8 + Math.random() * 0.7,
+      startX: 45 + Math.random() * 10,
+      startY: 55 + Math.random() * 10,
     };
   });
 }
 
-// Epic phrases for the stratosphere text
+function randomFrom<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 const LAUNCH_PHRASES = [
   'STRATOSPHERE',
   'ORBIT ACHIEVED',
@@ -36,7 +43,7 @@ const LAUNCH_PHRASES = [
   'LAUNCHED',
   'OBLITERATED',
   'VAPORIZED',
-];
+] as const;
 
 const SUBTITLES = [
   'THE LONGEST HITTER IN THE WORLD',
@@ -46,20 +53,34 @@ const SUBTITLES = [
   'SPONSORED BY NASA',
   'REGISTERED AS A WEAPON',
   'BROKE THE SOUND BARRIER',
-];
+] as const;
+
+interface ExplosionData {
+  particles: Particle[];
+  phrase: string;
+  subtitle: string;
+}
+
+function generateExplosionData(): ExplosionData {
+  return {
+    particles: generateParticles(50),
+    phrase: randomFrom(LAUNCH_PHRASES),
+    subtitle: randomFrom(SUBTITLES),
+  };
+}
 
 export function LaunchDaddyOverlay() {
   const { isExploding, isLaunchDaddyMode } = useLaunchDaddy();
+  const [explosionData, setExplosionData] = useState<ExplosionData>(generateExplosionData);
+  const [wasExploding, setWasExploding] = useState(false);
 
-  const particles = useMemo(() => generateParticles(50), [isExploding]);
-  const phrase = useMemo(
-    () => LAUNCH_PHRASES[Math.floor(Math.random() * LAUNCH_PHRASES.length)],
-    [isExploding]
-  );
-  const subtitle = useMemo(
-    () => SUBTITLES[Math.floor(Math.random() * SUBTITLES.length)],
-    [isExploding]
-  );
+  // Regenerate random data when explosion starts
+  if (isExploding && !wasExploding) {
+    setExplosionData(generateExplosionData());
+  }
+  if (isExploding !== wasExploding) {
+    setWasExploding(isExploding);
+  }
 
   if (!isLaunchDaddyMode || !isExploding) return null;
 
@@ -77,7 +98,7 @@ export function LaunchDaddyOverlay() {
 
         {/* Particle system */}
         <div className="launch-daddy-explosion__particles">
-          {particles.map((particle) => (
+          {explosionData.particles.map((particle) => (
             <div
               key={particle.id}
               className={`launch-daddy-particle launch-daddy-particle--${particle.type}`}
@@ -97,8 +118,8 @@ export function LaunchDaddyOverlay() {
       {/* Stratosphere launch */}
       <div className="launch-daddy-stratosphere">
         <div className="launch-daddy-stratosphere__ball" />
-        <div className="launch-daddy-stratosphere__text">{phrase}</div>
-        <div className="launch-daddy-stratosphere__subtitle">{subtitle}</div>
+        <div className="launch-daddy-stratosphere__text">{explosionData.phrase}</div>
+        <div className="launch-daddy-stratosphere__subtitle">{explosionData.subtitle}</div>
       </div>
     </>
   );

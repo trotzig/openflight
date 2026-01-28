@@ -1,22 +1,12 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { ReactNode } from 'react';
-
-interface LaunchDaddyContextType {
-  isLaunchDaddyMode: boolean;
-  toggleLaunchDaddy: () => void;
-  triggerExplosion: () => void;
-  isExploding: boolean;
-  secretTapCount: number;
-  handleSecretTap: () => void;
-}
-
-const LaunchDaddyContext = createContext<LaunchDaddyContextType | null>(null);
+import { LaunchDaddyContext } from './launchDaddyTypes';
 
 export function LaunchDaddyProvider({ children }: { children: ReactNode }) {
   const [isLaunchDaddyMode, setIsLaunchDaddyMode] = useState(false);
   const [isExploding, setIsExploding] = useState(false);
   const [secretTapCount, setSecretTapCount] = useState(0);
-  const [lastTapTime, setLastTapTime] = useState(0);
+  const lastTapTime = useRef(0);
 
   const toggleLaunchDaddy = useCallback(() => {
     setIsLaunchDaddyMode(prev => !prev);
@@ -32,21 +22,20 @@ export function LaunchDaddyProvider({ children }: { children: ReactNode }) {
   // Secret activation: tap 5 times quickly on the logo
   const handleSecretTap = useCallback(() => {
     const now = Date.now();
-    if (now - lastTapTime > 2000) {
-      // Reset if more than 2 seconds since last tap
+    if (now - lastTapTime.current > 2000) {
       setSecretTapCount(1);
     } else {
       setSecretTapCount(prev => {
         const newCount = prev + 1;
         if (newCount >= 5) {
-          setIsLaunchDaddyMode(prev => !prev);
+          setIsLaunchDaddyMode(mode => !mode);
           return 0;
         }
         return newCount;
       });
     }
-    setLastTapTime(now);
-  }, [lastTapTime]);
+    lastTapTime.current = now;
+  }, []);
 
   return (
     <LaunchDaddyContext.Provider
@@ -62,12 +51,4 @@ export function LaunchDaddyProvider({ children }: { children: ReactNode }) {
       {children}
     </LaunchDaddyContext.Provider>
   );
-}
-
-export function useLaunchDaddy() {
-  const context = useContext(LaunchDaddyContext);
-  if (!context) {
-    throw new Error('useLaunchDaddy must be used within LaunchDaddyProvider');
-  }
-  return context;
 }

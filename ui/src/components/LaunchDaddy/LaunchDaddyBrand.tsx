@@ -1,4 +1,4 @@
-import { useLaunchDaddy } from './LaunchDaddyContext';
+import { useLaunchDaddy } from './useLaunchDaddy';
 
 export function LaunchDaddyBrand() {
   const { isLaunchDaddyMode, toggleLaunchDaddy } = useLaunchDaddy();
