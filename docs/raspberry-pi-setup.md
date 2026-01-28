@@ -157,7 +157,7 @@ The camera enables real-time ball detection in the UI. When a ball is detected, 
 # Install system library for picamera2
 sudo apt install libcap-dev
 
-# Install Python packages (includes ultralytics for YOLO)
+# Install Python packages (OpenCV, tracking, etc.)
 uv pip install -e ".[camera]"
 ```
 
@@ -170,7 +170,10 @@ rpicam-hello --list-cameras
 # Quick preview test
 rpicam-hello
 
-# Test YOLO detection (see docs/yolo-performance-tuning.md for optimization)
+# Test ball detection with calibration script
+DISPLAY=:0 python scripts/calibrate_camera.py --use-contours --threshold 150
+
+# Optional: Test YOLO detection (see docs/yolo-performance-tuning.md)
 DISPLAY=:0 python scripts/test_yolo_detection.py \
   --model models/golf_ball_yolo11n.onnx \
   --imgsz 256 \
@@ -288,18 +291,21 @@ openflight --info       # Show radar configuration
 ### Server
 
 ```bash
-openflight-server                    # Start server with radar
-openflight-server --mock             # Mock mode (no radar)
-openflight-server --camera           # Enable camera for ball detection
-openflight-server --camera-model <path>  # Use custom YOLO model
-openflight-server --web-port 3000    # Custom port
+openflight-server                        # Start server with radar (camera auto-enabled)
+openflight-server --mock                 # Mock mode (no radar)
+openflight-server --no-camera            # Disable camera
+openflight-server --hough-param2 25      # Tune ball detection sensitivity
+openflight-server --camera-model <path>  # Use YOLO model instead of Hough
+openflight-server --mode rolling-buffer  # Enable spin detection
+openflight-server --web-port 3000        # Custom port
 ```
 
 ### Kiosk
 
 ```bash
-./scripts/start-kiosk.sh              # Production mode (camera enabled by default)
+./scripts/start-kiosk.sh              # Production mode (Hough detection, camera auto-enabled)
 ./scripts/start-kiosk.sh --mock       # Mock mode
 ./scripts/start-kiosk.sh --no-camera  # Disable camera
-./scripts/start-kiosk.sh --camera-model models/golf_ball_yolo11n.onnx  # Custom model
+./scripts/start-kiosk.sh --hough-param2 25  # Tune detection sensitivity
+./scripts/start-kiosk.sh --camera-model models/golf_ball_yolo11n.onnx  # Use YOLO instead
 ```

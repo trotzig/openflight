@@ -10,8 +10,11 @@ OpenFlight is an open-source golf launch monitor that measures ball speed using 
 ### What It Measures
 
 - **Ball Speed**: 30-220 mph range with ±0.5% accuracy
+- **Club Speed**: Detected from pre-impact readings
+- **Smash Factor**: Ball speed / club speed ratio
 - **Estimated Carry Distance**: Based on ball speed (simplified model)
 - **Launch Angle** (optional): With Raspberry Pi camera module
+- **Spin Rate** (experimental): Via rolling buffer I/Q analysis (~50-60% detection rate)
 
 ### Hardware
 
@@ -35,21 +38,6 @@ cd openflight
 
 # Run the setup script (installs Python + Node dependencies, builds UI)
 ./scripts/setup.sh
-```
-
-Or manually:
-
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create venv and install dependencies
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e ".[ui]"
-
-# Build the UI
-cd ui && npm install && npm run build && cd ..
 ```
 
 ### Basic Usage (CLI)
@@ -76,6 +64,12 @@ openflight-server
 
 # Run in mock mode (no radar needed, for development)
 openflight-server --mock
+
+# Disable camera (auto-enabled if available)
+openflight-server --no-camera
+
+# Use rolling buffer mode for spin detection
+openflight-server --mode rolling-buffer
 ```
 
 Then open http://localhost:8080 in a browser.
@@ -83,7 +77,7 @@ Then open http://localhost:8080 in a browser.
 For kiosk mode on Raspberry Pi (fullscreen):
 
 ```bash
-chromium-browser --kiosk http://localhost:8080
+./scripts/start-kiosk.sh
 ```
 
 See [docs/raspberry-pi-setup.md](docs/raspberry-pi-setup.md) for complete Raspberry Pi setup instructions including auto-start and camera configuration.
@@ -269,11 +263,9 @@ radar.save_config()
 
 ### What OpenFlight Does NOT Measure (Yet)
 
-- **Spin Rate**: Requires high-speed camera
-- **Club Speed**: Could be added with timing/positioning changes
 - **Side Spin / Curve**: Requires multiple sensors or camera
 
-Note: **Launch Angle** is available with the optional camera module. See [Camera Setup](#camera-calibration).
+Note: **Launch Angle** is available with the optional camera module. See [Camera Setup](#camera-calibration). **Spin Rate** is available experimentally via rolling buffer mode (see [docs/rolling_buffer_spin_detection.md](docs/rolling_buffer_spin_detection.md)).
 
 ### Accuracy Considerations
 
@@ -309,20 +301,32 @@ Note: **Launch Angle** is available with the optional camera module. See [Camera
 openflight/
 ├── src/openflight/
 │   ├── __init__.py
-│   ├── ops243.py          # OPS243-A radar driver
-│   ├── launch_monitor.py  # Main launch monitor
-│   ├── server.py          # WebSocket server for UI
-│   └── camera_tracker.py  # YOLO ball tracking
-├── ui/                    # React frontend
+│   ├── ops243.py              # OPS243-A radar driver
+│   ├── launch_monitor.py      # Main launch monitor & shot detection
+│   ├── server.py              # Flask-SocketIO server for web UI
+│   ├── session_logger.py      # JSONL session logging
+│   ├── camera_tracker.py      # Ball tracking (Hough circles + ByteTrack)
+│   ├── camera/                # Camera subsystem
+│   │   ├── capture.py         # Frame capture utilities
+│   │   ├── detector.py        # Ball detector (Hough circles)
+│   │   ├── launch_angle.py    # Launch angle calculation
+│   │   └── tracker.py         # Tracking logic
+│   ├── streaming/             # Real-time I/Q processing
+│   │   ├── processor.py       # FFT processing pipeline
+│   │   └── cfar.py            # 2D CFAR noise rejection
+│   └── rolling_buffer/        # Spin rate detection
+│       ├── monitor.py         # Rolling buffer monitor
+│       ├── processor.py       # I/Q processing for spin
+│       ├── trigger.py         # Trigger strategies
+│       └── types.py           # Data types
+├── ui/                        # React frontend
 │   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── hooks/         # Custom hooks (WebSocket)
-│   │   └── App.tsx        # Main app
+│   │   ├── components/        # React components
+│   │   ├── hooks/             # Custom hooks (WebSocket)
+│   │   └── App.tsx            # Main app
 │   └── package.json
-├── scripts/               # Utility scripts
-├── models/                # YOLO models for ball detection
-├── docs/                  # Documentation
-├── archive/               # Previous CDM324 approach (reference)
+├── scripts/                   # Utility & setup scripts
+├── docs/                      # Documentation
 ├── pyproject.toml
 └── README.md
 ```
@@ -334,10 +338,9 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 Areas of interest:
 
 - **Better distance models**: Improve carry estimates with more physics
-- **Club detection**: Detect club head speed
-- **Spin detection**: Add high-speed camera for spin rate
+- **Improved spin detection**: Increase rolling buffer spin detection reliability beyond 50-60%
 - **Mobile app**: Bluetooth connection to phone
-- **Hardware acceleration**: Optimize YOLO for Hailo/Coral accelerators
+- **Hardware acceleration**: Optimize detection for Hailo/Coral accelerators
 
 ### Camera Calibration
 
@@ -375,9 +378,9 @@ python scripts/calibrate_camera.py --exposure 2000 --gain 4.0 --threshold 200
 | `[`/`]` | Adjust minimum radius |
 | `{`/`}` | Adjust maximum radius |
 
-The script will display final settings when you exit - use these values to configure `DetectorConfig` in your code.
+The script will display final settings when you exit - use these values to configure detection in your setup.
 
-For YOLO model optimization and FPS tuning, see [docs/yolo-performance-tuning.md](docs/yolo-performance-tuning.md).
+The default detection uses Hough circle transform, tunable via `--hough-param2` (lower = more sensitive, default 27). YOLO models can optionally be used via `--camera-model`. For YOLO optimization, see [docs/yolo-performance-tuning.md](docs/yolo-performance-tuning.md).
 
 ### Running Tests
 
@@ -402,7 +405,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines. Quick summary:
 
 - [Raspberry Pi Setup Guide](docs/raspberry-pi-setup.md) - Complete Pi 5 setup with touchscreen and camera
 - [Parts List](docs/PARTS.md) - Full hardware requirements
-- [YOLO Performance Tuning](docs/yolo-performance-tuning.md) - Optimize ball detection FPS
+- [Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md) - Spin rate measurement via I/Q analysis
+- [YOLO Performance Tuning](docs/yolo-performance-tuning.md) - Optimize YOLO ball detection FPS
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute
 - [Changelog](docs/CHANGELOG.md) - Version history
 

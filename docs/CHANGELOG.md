@@ -11,12 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Camera integration with real-time ball detection in UI
 - Ball detection indicator in header (shows detection status)
 - Camera tab with live MJPEG stream and detection overlay
+- Hough circle transform as default ball detector (replaces YOLO dependency)
+- ByteTrack object tracking for persistent ball identification
+- Club speed detection and smash factor calculation
+- Rolling buffer mode for experimental spin rate detection
+- Session logging to JSONL files (`~/openflight_sessions/`)
+- I/Q streaming mode with FFT and 2D CFAR noise rejection
+- `--hough-param2` flag for tuning detection sensitivity
+- `--mode rolling-buffer` flag for spin detection
+- `--session-location` and `--log-dir` flags for session logging
+- Roboflow API integration as optional detection backend
 - YOLO performance tuning documentation for Raspberry Pi
 - ONNX model export support for faster inference
 - Threaded camera capture for improved FPS
+- Rolling buffer spin detection documentation
 
 ### Changed
+- Default ball detection uses Hough circles instead of YOLO (no ML model required)
 - Camera enabled by default in kiosk mode (use `--no-camera` to disable)
+- Dropped Python 3.9 support (requires >=3.10)
 - Updated Raspberry Pi setup guide with camera UI instructions
 
 ## [0.2.0] - 2024-12-01
@@ -31,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kiosk mode script for Raspberry Pi deployment
 - Systemd service for auto-start on boot
 - Camera module for launch angle detection (experimental)
-- YOLO-based ball tracking
+- Camera-based ball tracking for launch angle
 - Club type selection (Driver through PW)
 
 ### Changed

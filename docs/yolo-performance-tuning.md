@@ -1,5 +1,7 @@
 # YOLO Detection Performance Tuning on Raspberry Pi
 
+> **Note**: YOLO is optional. OpenFlight uses Hough circle detection by default, which requires no ML model and runs efficiently on Pi. Use YOLO via `--camera-model` only if you need higher detection accuracy.
+
 This guide covers how to optimize YOLO golf ball detection for maximum FPS on Raspberry Pi 5.
 
 ## Camera in OpenFlight UI
