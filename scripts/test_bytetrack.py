@@ -116,43 +116,50 @@ class HoughDetector:
 
     def _detect_white_blobs(self, frame: np.ndarray, is_rgb: bool = False) -> List[Detection]:
         """
-        Detect white circular objects using color-based detection.
+        Detect white circular objects using adaptive brightness thresholding.
 
         Better for low-contrast situations (ball on carpet, grass, etc.)
         where edge-based Hough detection struggles.
         """
-        # Convert to HSV for color-based detection
+        # Convert to grayscale
         if is_rgb:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         else:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         h, w = gray.shape[:2]
 
-        # White color detection: low saturation, high value
-        # Golf balls are very white (low saturation, high brightness)
-        lower_white = np.array([0, 0, 180])   # Any hue, low sat, high value
-        upper_white = np.array([180, 60, 255])  # Any hue, low sat, max value
+        # Use adaptive thresholding to find bright regions relative to surroundings
+        # This works better than fixed threshold in varying lighting
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=31,  # Local area size
+            C=-15  # Negative C means we want bright spots
+        )
 
-        white_mask = cv2.inRange(hsv, lower_white, upper_white)
+        # Also try simple Otsu thresholding as fallback
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # Morphological operations to clean up mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
+        # Combine both methods - OR them together
+        combined = cv2.bitwise_or(binary, otsu)
 
-        # Find contours of white regions
-        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Morphological operations to clean up
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
+        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
+
+        # Find contours of bright regions
+        contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         detections = []
         for contour in contours:
             area = cv2.contourArea(contour)
 
             # Filter by area (approximate ball size)
-            min_area = np.pi * self.min_radius ** 2
-            max_area = np.pi * self.max_radius ** 2
+            min_area = np.pi * self.min_radius ** 2 * 0.5  # Allow smaller
+            max_area = np.pi * self.max_radius ** 2 * 2.0  # Allow larger
             if area < min_area or area > max_area:
                 continue
 
@@ -160,28 +167,29 @@ class HoughDetector:
             (cx, cy), radius = cv2.minEnclosingCircle(contour)
             cx, cy, radius = int(cx), int(cy), int(radius)
 
+            # Radius bounds check
+            if radius < self.min_radius or radius > self.max_radius:
+                continue
+
             # Check circularity (area vs enclosing circle area)
             enclosing_area = np.pi * radius ** 2
             circularity = area / enclosing_area if enclosing_area > 0 else 0
 
-            # Golf balls should be fairly circular (>0.7)
-            if circularity < 0.65:
-                continue
-
-            # Radius bounds check
-            if radius < self.min_radius or radius > self.max_radius:
+            # Golf balls should be fairly circular (lenient)
+            if circularity < 0.4:
                 continue
 
             # Bounds check
             if cx - radius < 0 or cx + radius >= w or cy - radius < 0 or cy + radius >= h:
                 continue
 
-            # Get brightness of the region
+            # Get actual brightness of the region
             mask = np.zeros_like(gray)
             cv2.circle(mask, (cx, cy), radius, 255, -1)
             mean_brightness = cv2.mean(gray, mask=mask)[0]
 
-            if mean_brightness < self.min_brightness:
+            # Must still be reasonably bright (but lower threshold)
+            if mean_brightness < 100:
                 continue
 
             # Confidence based on circularity and brightness
