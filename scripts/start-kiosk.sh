@@ -19,6 +19,8 @@ CAMERA_IMGSZ=256
 ROBOFLOW_MODEL=""
 ROBOFLOW_API_KEY=""
 MODE=""
+TRIGGER=""
+SOUND_PRE_TRIGGER=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -61,6 +63,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --mode)
             MODE="$2"
+            shift 2
+            ;;
+        --trigger)
+            TRIGGER="$2"
+            shift 2
+            ;;
+        --sound-pre-trigger)
+            SOUND_PRE_TRIGGER="$2"
             shift 2
             ;;
         --port|-p)
@@ -153,6 +163,14 @@ fi
 
 if [ -n "$MODE" ]; then
     SERVER_CMD="$SERVER_CMD --mode $MODE"
+fi
+
+if [ -n "$TRIGGER" ]; then
+    SERVER_CMD="$SERVER_CMD --trigger $TRIGGER"
+fi
+
+if [ -n "$SOUND_PRE_TRIGGER" ]; then
+    SERVER_CMD="$SERVER_CMD --sound-pre-trigger $SOUND_PRE_TRIGGER"
 fi
 
 # Start the server

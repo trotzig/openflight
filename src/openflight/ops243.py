@@ -942,6 +942,67 @@ class OPS243Radar:
 
         return full_response
 
+    def wait_for_hardware_trigger(self, timeout: float = 30.0) -> str:
+        """
+        Wait for hardware trigger to fire and read the buffer dump.
+
+        Unlike trigger_capture() which sends S!, this method just waits
+        for data to appear on serial — triggered externally via J3 pin 3
+        (HOST_INT). Used with SoundTrigger (SparkFun SEN-14262).
+
+        Args:
+            timeout: Maximum time to wait for trigger data
+
+        Returns:
+            Raw response string containing JSON lines, or empty string on timeout
+        """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
+        # Clear any stale data
+        self.serial.reset_input_buffer()
+
+        response_lines = []
+        start_time = time.time()
+        last_data_time = None
+        bytes_received = 0
+
+        while (time.time() - start_time) < timeout:
+            if self.serial.in_waiting:
+                chunk = self.serial.read(self.serial.in_waiting)
+                response_lines.append(chunk.decode('ascii', errors='ignore'))
+                bytes_received += len(chunk)
+                last_data_time = time.time()
+
+                # Check if we have complete I/Q data
+                full_response = ''.join(response_lines)
+                if '"Q"' in full_response:
+                    q_idx = full_response.rfind('"Q"')
+                    remaining = full_response[q_idx:]
+                    if ']}' in remaining or (
+                        remaining.rstrip().endswith(']')
+                        and remaining.count('[') == remaining.count(']')
+                    ):
+                        break
+
+                time.sleep(0.01)
+            else:
+                # If we've started receiving data, use shorter timeout
+                if last_data_time and (time.time() - last_data_time) > 0.5:
+                    full_response = ''.join(response_lines)
+                    if '"Q"' in full_response:
+                        break
+                time.sleep(0.02)
+
+        full_response = ''.join(response_lines) if response_lines else ""
+
+        if not full_response:
+            logger.info("Hardware trigger: no data received within %ss", timeout)
+        else:
+            logger.info("Hardware trigger: received %d bytes", len(full_response))
+
+        return full_response
+
     def rearm_rolling_buffer(self):
         """
         Re-arm rolling buffer for next capture.

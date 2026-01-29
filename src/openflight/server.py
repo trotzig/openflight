@@ -659,6 +659,7 @@ def start_monitor(
     mode: str = "streaming",
     trigger_type: str = "polling",
     debug: bool = False,
+    trigger_kwargs: Optional[dict] = None,
 ):
     """
     Start the launch monitor.
@@ -684,7 +685,7 @@ def start_monitor(
     elif mode == "rolling-buffer":
         # Rolling buffer mode for spin detection
         from .rolling_buffer import RollingBufferMonitor
-        monitor = RollingBufferMonitor(port=port, trigger_type=trigger_type)
+        monitor = RollingBufferMonitor(port=port, trigger_type=trigger_type, **(trigger_kwargs or {}))
         print(f"[MODE] Rolling buffer mode enabled (trigger: {trigger_type})")
     else:
         # Default streaming mode
@@ -903,9 +904,14 @@ def main():
     )
     parser.add_argument(
         "--trigger",
-        choices=["polling", "threshold"],
+        choices=["polling", "threshold", "speed", "sound"],
         default="polling",
         help="Trigger strategy for rolling-buffer mode (default: polling)"
+    )
+    parser.add_argument(
+        "--sound-pre-trigger",
+        type=int, default=12,
+        help="Pre-trigger segments for sound trigger (default: 12, each ~4.27ms at 30ksps)"
     )
     args = parser.parse_args()
 
@@ -947,12 +953,18 @@ def main():
         print("Raw radar readings display ENABLED - signed speed values will be shown")
 
     # Start the monitor
+    # Build trigger-specific kwargs
+    trigger_kwargs = {}
+    if args.trigger == "sound":
+        trigger_kwargs["pre_trigger_segments"] = args.sound_pre_trigger
+
     start_monitor(
         port=args.port,
         mock=args.mock,
         mode=args.mode,
         trigger_type=args.trigger,
         debug=args.debug,
+        trigger_kwargs=trigger_kwargs,
     )
 
     if args.mock:

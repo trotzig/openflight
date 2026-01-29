@@ -409,12 +409,97 @@ class SpeedTriggeredCapture(TriggerStrategy):
         return self._last_trigger_speed
 
 
+class SoundTrigger(TriggerStrategy):
+    """
+    Hardware sound trigger using SparkFun SEN-14262.
+
+    Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
+    The GATE output goes HIGH on loud sound (club impact).
+    OPS243-A uses rising edge detection on HOST_INT as trigger.
+
+    No software trigger (S!) needed — the radar triggers itself
+    via hardware. We just need to wait for data to appear on serial.
+    """
+
+    def __init__(
+        self,
+        pre_trigger_segments: int = 12,
+    ):
+        """
+        Initialize sound trigger.
+
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments for S# command.
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+                Tune based on mic-to-impact distance.
+        """
+        self.pre_trigger_segments = pre_trigger_segments
+        self._split_configured = False
+
+    def wait_for_trigger(
+        self,
+        radar: "OPS243Radar",
+        processor: RollingBufferProcessor,
+        timeout: float = 30.0,
+    ) -> Optional[IQCapture]:
+        """
+        Wait for hardware sound trigger and capture buffer.
+
+        Unlike other triggers, no S! command is sent. The radar's
+        HOST_INT pin receives the trigger from the SEN-14262 GATE
+        output, causing the radar to dump its rolling buffer automatically.
+        We just block on serial read waiting for the I/Q data to arrive.
+        """
+        # Set pre-trigger split once (persists across captures)
+        if not self._split_configured:
+            radar.set_trigger_split(self.pre_trigger_segments)
+            self._split_configured = True
+
+        logger.info(
+            "Waiting for hardware sound trigger (timeout=%ss, S#%s)...",
+            timeout, self.pre_trigger_segments
+        )
+
+        response = radar.wait_for_hardware_trigger(timeout=timeout)
+
+        if not response:
+            logger.info("Sound trigger timeout - no hardware trigger received")
+            return None
+
+        logger.info("Hardware trigger fired, received %d bytes", len(response))
+
+        # Re-arm for next capture
+        radar.rearm_rolling_buffer()
+
+        capture = processor.parse_capture(response)
+
+        if capture:
+            timeline = processor.process_standard(capture)
+            outbound = [
+                r for r in timeline.readings
+                if r.is_outbound and r.speed_mph >= 15.0
+            ]
+            if outbound:
+                peak = max(r.speed_mph for r in outbound)
+                logger.info("Sound trigger capture: %d readings, peak %.1f mph",
+                           len(outbound), peak)
+            else:
+                logger.info("Sound trigger capture: no significant outbound speed")
+
+        return capture
+
+    def reset(self):
+        """Reset trigger state."""
+        self._split_configured = False
+
+
 def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:
     """
     Factory function to create trigger strategy.
 
     Args:
-        trigger_type: "speed" (recommended), "polling", "threshold", or "manual"
+        trigger_type: "speed" (recommended), "polling", "threshold", "manual", or "sound"
         **kwargs: Arguments passed to trigger constructor
 
     Returns:
@@ -426,12 +511,14 @@ def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:
         - "polling": Continuously capture and check for activity. Simple but slow.
         - "threshold": Speed threshold triggers capture. Less efficient than "speed".
         - "manual": External trigger for testing.
+        - "sound": Hardware sound trigger via SparkFun SEN-14262. <1ms response.
     """
     triggers = {
         "speed": SpeedTriggeredCapture,
         "polling": PollingTrigger,
         "threshold": ThresholdTrigger,
         "manual": ManualTrigger,
+        "sound": SoundTrigger,
     }
 
     if trigger_type not in triggers:
