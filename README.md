@@ -3,6 +3,8 @@
   DIY Golf Launch Monitor using the OPS243-A Doppler Radar.
 </p>
 
+## FYI - This is in constant development and doesn't work that well at the moment
+
 ## Overview
 
 OpenFlight is an open-source golf launch monitor that measures ball speed using a commercial Doppler radar sensor. The OPS243-A from OmniPreSense provides professional-grade speed measurement (±0.5% accuracy) in a simple USB-connected package.
