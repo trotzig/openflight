@@ -85,9 +85,13 @@ export function ClubPicker({ selectedClub, onClubChange }: ClubPickerProps) {
 
       <dialog
         className="club-picker__dropdown"
-        closedby="any"
         onClose={() => setIsOpen(false)}
         ref={dialogRef}
+        onClick={event => {
+          if (event.target === event.currentTarget) {
+            setIsOpen(false);
+          }
+        }}
       >
         {Object.entries(CLUBS_BY_TYPE).map(([type, clubs]) => (
           <div className="club-picker__section" key={type}>
