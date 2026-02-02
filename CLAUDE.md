@@ -6,26 +6,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpenFlight is a DIY golf launch monitor using the OPS243-A Doppler radar. It measures ball speed, estimates carry distance, and optionally tracks launch angle (camera) and spin rate (rolling buffer mode).
 
+## Development Rules
+
+- **Always use `uv` for Python commands.** Use `uv run` to execute Python tools (pytest, pylint, ruff, etc.). Never use bare `python`, `pip`, `pytest`, etc.
+- **Update `pyproject.toml` when adding dependencies.** If new Python packages are introduced, add them to the appropriate dependency list in `pyproject.toml`.
+- **Bug reports: write a failing test first.** When the user reports a bug, write a test that reproduces and confirms the bug before investigating or fixing it.
+- **Default startup is `scripts/start-kiosk.sh`.** Assume the project is started via this script unless told otherwise. It handles venv activation, UI build, and server launch.
+
 ## Commands
 
 ### Python Backend
 
 ```bash
 # Run tests
-pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run single test file
-pytest tests/test_launch_monitor.py -v
+uv run pytest tests/test_launch_monitor.py -v
 
 # Run single test
-pytest tests/test_launch_monitor.py::TestLaunchMonitor::test_name -v
+uv run pytest tests/test_launch_monitor.py::TestLaunchMonitor::test_name -v
 
 # Lint (must score 9.0+)
-pylint src/openflight/ --fail-under=9
+uv run pylint src/openflight/ --fail-under=9
 
 # Format check
-ruff check src/openflight/
-ruff format --check src/openflight/
+uv run ruff check src/openflight/
+uv run ruff format --check src/openflight/
 ```
 
 ### React UI (in /ui directory)
@@ -39,9 +46,9 @@ npm run lint     # ESLint
 ### Running the Application
 
 ```bash
-openflight-server           # Web UI with real radar
-openflight-server --mock    # Development mode without hardware
-openflight                  # CLI-only mode
+scripts/start-kiosk.sh              # Default: kiosk mode with real radar
+scripts/start-kiosk.sh --mock       # Development mode without hardware
+scripts/start-kiosk.sh --mode rolling-buffer --trigger sound  # Rolling buffer with sound trigger
 ```
 
 ## Architecture

@@ -474,18 +474,26 @@ class SoundTrigger(TriggerStrategy):
 
         capture = processor.parse_capture(response)
 
-        if capture:
-            timeline = processor.process_standard(capture)
-            outbound = [
-                r for r in timeline.readings
-                if r.is_outbound and r.speed_mph >= 15.0
-            ]
-            if outbound:
-                peak = max(r.speed_mph for r in outbound)
-                logger.info("Sound trigger capture: %d readings, peak %.1f mph",
-                           len(outbound), peak)
-            else:
-                logger.info("Sound trigger capture: no significant outbound speed")
+        if not capture:
+            return None
+
+        # Quick validation: does the capture contain any real swing data?
+        # At a driving range, a nearby player's impact sound can trip the
+        # trigger even though nothing was moving in front of our radar.
+        # Discard these false triggers immediately so we re-arm fast.
+        timeline = processor.process_standard(capture)
+        outbound = [
+            r for r in timeline.readings
+            if r.is_outbound and r.speed_mph >= 15.0
+        ]
+
+        if not outbound:
+            logger.info("Sound trigger: no swing detected in capture, re-arming")
+            return None
+
+        peak = max(r.speed_mph for r in outbound)
+        logger.info("Sound trigger capture: %d readings, peak %.1f mph",
+                   len(outbound), peak)
 
         return capture
 

@@ -44,6 +44,10 @@ camera = [
     "picamera2>=0.3.0; sys_platform == 'linux'",
     "inference-sdk>=0.9.0",  # Roboflow inference API
 ]
+# Sound trigger testing (mic-based placement tester)
+sound-test = [
+    "pyaudio>=0.2.11",
+]
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",
