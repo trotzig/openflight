@@ -817,22 +817,29 @@ class OPS243Radar:
         """
         Enable rolling buffer mode for raw I/Q capture.
 
-        Rolling buffer mode (GC) captures 4096 raw I/Q samples instead of
+        Rolling buffer mode (G1) captures 4096 raw I/Q samples instead of
         processing them internally. This allows post-capture FFT processing
         with overlapping windows for higher temporal resolution and spin detection.
 
         Commands:
-        - GC: Enable rolling buffer (Continuous Sampling Mode)
+        - G1: Enable rolling buffer mode (single capture, 4096 samples)
+        - K+: Enable peak detection
         - PA: Activate sampling (required to start data capture loop)
 
-        After enabling, use trigger_capture() to dump the buffer.
+        After enabling, use trigger_capture() or hardware trigger (HOST_INT) to dump the buffer.
+
+        Note: G1 is for rolling buffer capture mode. GC is continuous sampling (different!).
         """
         logger.info("Enabling rolling buffer mode...")
 
-        # Enable rolling buffer mode
-        response = self._send_command("GC")
+        # Enable rolling buffer mode (G1, not GC!)
+        response = self._send_command("G1")
         time.sleep(0.1)
-        logger.info("GC response: %s", response if response else '(none)')
+        logger.info("G1 response: %s", response if response else '(none)')
+
+        # Enable peak detection
+        self._send_command("K+")
+        time.sleep(0.1)
 
         # Activate sampling - puts sensor into active data capture loop
         self._send_command("PA")
@@ -1008,9 +1015,11 @@ class OPS243Radar:
         Re-arm rolling buffer for next capture.
 
         After trigger_capture() outputs data, the sensor pauses in Idle mode.
-        Per OmniPreSense reference code, send G1/GC again to restart sampling.
+        Send G1 again to restart sampling for next capture.
         """
-        self._send_command("GC")  # Re-enable rolling buffer mode
+        self._send_command("G1")  # Re-enable rolling buffer mode
+        time.sleep(0.05)
+        self._send_command("PA")  # Activate sampling
         time.sleep(0.05)
 
     def configure_for_rolling_buffer(self):
@@ -1019,16 +1028,18 @@ class OPS243Radar:
 
         Similar to configure_for_golf() but sets up for rolling buffer mode:
         - 30ksps sample rate (max ~208 mph, required for golf)
-        - Rolling buffer enabled (GC command)
+        - Rolling buffer enabled (G1 command)
+        - Peak detection enabled (K+)
         - Trigger split for ~34ms pre-trigger data
 
         Note: Sample rate must be set AFTER enabling rolling buffer mode
-        as the GC command may reset to default 10ksps.
+        as the G1 command may reset to default 10ksps.
 
         Based on OmniPreSense reference implementation:
         1. PI - deactivate to reset state
-        2. GC - enable rolling buffer mode
-        3. S=30 - set sample rate (30ksps for golf)
+        2. G1 - enable rolling buffer mode (NOT GC which is continuous sampling)
+        3. K+ - enable peak detection
+        4. S=30 - set sample rate (30ksps for golf)
         """
         # Set units to MPH first
         self.set_units(SpeedUnit.MPH)
@@ -1048,7 +1059,7 @@ class OPS243Radar:
         self.enable_rolling_buffer()
 
         # IMPORTANT: Set sample rate AFTER enabling rolling buffer
-        # GC mode defaults to 10ksps, we need 30ksps for golf
+        # G1 mode defaults to 10ksps, we need 30ksps for golf
         self.set_sample_rate(30000)
         time.sleep(0.1)
         logger.info("Sample rate set to 30ksps")
@@ -1084,7 +1095,7 @@ class OPS243Radar:
         - R- = outbound only (ball/club going away from radar)
 
         This mode is used to detect the initial club swing, then we switch
-        to rolling buffer mode (GC) to capture high-resolution ball data.
+        to rolling buffer mode (G1) to capture high-resolution ball data.
 
         Expected timing:
         - Club detected in speed mode
@@ -1165,15 +1176,23 @@ class OPS243Radar:
         with no history (S#0 API command)"
         """
         # Switch to rolling buffer mode - radar goes active immediately
-        self._send_command("GC")
+        self._send_command("G1")
         time.sleep(0.02)  # Brief delay for mode switch
+
+        # Enable peak detection
+        self._send_command("K+")
+        time.sleep(0.02)
 
         # S#0 = no pre-trigger history, only capture new samples
         self._send_command("S#0")
         time.sleep(0.02)
 
-        # 30ksps sample rate (GC may reset to default)
+        # 30ksps sample rate (G1 may reset to default)
         self.set_sample_rate(30000)
+        time.sleep(0.02)
+
+        # Activate sampling
+        self._send_command("PA")
         time.sleep(0.02)
 
     def read_speed_nonblocking(self) -> Optional[SpeedReading]:
