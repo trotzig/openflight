@@ -120,44 +120,24 @@ def main():
     print("STEP 3: Test software trigger (S!)")
     print("-" * 70)
 
-    print("Sending S! command...")
+    print("Using radar.trigger_capture() method...")
     start_time = time.perf_counter()
 
-    # Clear buffer first
-    radar.serial.reset_input_buffer()
-
-    # Send S! and read response
-    radar.serial.write(b"S!\r")
-    radar.serial.flush()
-
-    # Read response with timeout
-    response_lines = []
-    deadline = time.time() + 5.0
-
-    while time.time() < deadline:
-        if radar.serial.in_waiting > 0:
-            line = radar.serial.readline().decode('utf-8', errors='ignore').strip()
-            if line:
-                response_lines.append(line)
-                # Check if we got I/Q data
-                if '"Q"' in line:
-                    break
-        else:
-            time.sleep(0.01)
+    response = radar.trigger_capture(timeout=10.0)
 
     elapsed = (time.perf_counter() - start_time) * 1000
 
-    if response_lines:
+    if response:
         print(f"  Response received in {elapsed:.1f}ms")
-        print(f"  Lines received: {len(response_lines)}")
-        for i, line in enumerate(response_lines):
-            preview = line[:80] + "..." if len(line) > 80 else line
-            print(f"    [{i}]: {preview}")
+        print(f"  Response length: {len(response)} bytes")
+
+        # Show first part of response
+        preview = response[:200] + "..." if len(response) > 200 else response
+        print(f"  Preview: {preview}")
 
         # Check for I/Q data
-        full_response = '\n'.join(response_lines)
-        has_i = '"I"' in full_response or '"I":' in full_response
-        has_q = '"Q"' in full_response or '"Q":' in full_response
+        has_i = '"I"' in response or '"I":' in response
+        has_q = '"Q"' in response or '"Q":' in response
         print()
         print(f"  Contains I data: {has_i}")
         print(f"  Contains Q data: {has_q}")
@@ -168,6 +148,10 @@ def main():
         else:
             print()
             print("  WARNING: Response received but no I/Q data found")
+            print("  This suggests rolling buffer mode is not properly configured.")
+            print()
+            print("  Full response:")
+            print(f"  {response}")
     else:
         print(f"  FAIL: No response after {elapsed:.1f}ms")
         print("  Rolling buffer mode may not be configured correctly.")
