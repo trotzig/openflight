@@ -47,18 +47,81 @@ The sensor returns JSON with:
 
 The radar needs a trigger to know when to dump the buffer. Options:
 
-1. **Speed Threshold Trigger** (Recommended)
-   - Configure minimum speed threshold (e.g., 50+ mph)
-   - When club head is detected above threshold, trigger fires
-   - Buffer contains pre-trigger (backswing) and post-trigger (impact + ball flight)
+### 1. GPIO Passthrough Sound Trigger (Recommended)
 
-2. **External GPIO Trigger**
-   - Physical sensor (break beam, pressure mat, microphone)
-   - More reliable but requires additional hardware
+Uses the SparkFun SEN-14262 sound detector with Pi as a voltage booster for ultra-low-latency triggering (~10μs).
 
-3. **Software Polling**
-   - Continuously poll with S! and look for activity
-   - Less efficient but simpler to implement
+**Hardware Required:**
+- SparkFun SEN-14262 Sound Detector (~$12)
+- Jumper wires for GPIO connection
+
+**Wiring:**
+```
+SEN-14262 GATE → Pi GPIO17 (physical pin 11) [input]
+Pi GPIO27 (physical pin 13) → OPS243-A HOST_INT (J3 Pin 3) [output]
+SEN-14262 VCC → Pi 3.3V (pin 1)
+SEN-14262 GND → Pi GND (pin 6) → Radar GND
+```
+
+**How it works:**
+1. Club impact creates sound wave
+2. SEN-14262 GATE goes HIGH (~2.5V)
+3. Pi GPIO17 detects edge (threshold ~1.8V, lower than HOST_INT)
+4. lgpio C callback immediately pulses GPIO27 HIGH (3.3V)
+5. Radar HOST_INT triggers buffer dump
+6. Python reads I/Q data from serial
+
+**Why GPIO Passthrough?** The SEN-14262 GATE voltage (~2.5V) doesn't reach the radar's HOST_INT threshold (~3.0V). The Pi acts as a hardware voltage booster, and the lgpio callback runs in C (not Python) for minimal latency.
+
+**Usage:**
+```bash
+# Via server
+openflight-server --mode rolling-buffer --trigger sound-passthrough
+
+# Test script with latency measurement
+uv run python scripts/test_sound_trigger_passthrough.py
+```
+
+### 2. Speed Threshold Trigger
+
+- Configure minimum speed threshold (e.g., 50+ mph)
+- When club head is detected above threshold, trigger fires
+- Buffer contains pre-trigger (backswing) and post-trigger (impact + ball flight)
+- ~5-6ms response time per OmniPreSense
+
+**Usage:**
+```bash
+openflight-server --mode rolling-buffer --trigger speed
+```
+
+### 3. GPIO Software Trigger (Fallback)
+
+Uses Pi GPIO to detect sound, then sends S! command via serial. Higher latency (~1-18ms) but simpler setup.
+
+**Usage:**
+```bash
+openflight-server --mode rolling-buffer --trigger sound-gpio
+```
+
+### 4. Software Polling
+
+- Continuously poll with S! and look for activity
+- Less efficient but simplest to implement
+- ~300ms latency
+
+**Usage:**
+```bash
+openflight-server --mode rolling-buffer --trigger polling
+```
+
+## Trigger Latency Comparison
+
+| Trigger Type | Latency | Hardware Required |
+|--------------|---------|-------------------|
+| `sound-passthrough` | ~10μs | SEN-14262 + GPIO wiring |
+| `speed` | ~5-6ms | None (uses radar detection) |
+| `sound-gpio` | ~1-18ms | SEN-14262 + GPIO wiring |
+| `polling` | ~300ms | None |
 
 ## Signal Processing Pipeline
 

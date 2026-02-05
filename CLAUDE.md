@@ -48,7 +48,19 @@ npm run lint     # ESLint
 ```bash
 scripts/start-kiosk.sh              # Default: kiosk mode with real radar
 scripts/start-kiosk.sh --mock       # Development mode without hardware
-scripts/start-kiosk.sh --mode rolling-buffer --trigger sound  # Rolling buffer with sound trigger
+scripts/start-kiosk.sh --mode rolling-buffer --trigger sound-passthrough  # Rolling buffer with GPIO passthrough sound trigger (recommended)
+scripts/start-kiosk.sh --mode rolling-buffer --trigger sound-gpio  # Rolling buffer with software sound trigger (fallback)
+scripts/start-kiosk.sh --mode rolling-buffer --trigger speed  # Rolling buffer with speed-based trigger
+```
+
+### Sound Trigger Testing
+
+```bash
+# Test GPIO passthrough trigger with latency measurement
+uv run python scripts/test_sound_trigger_passthrough.py
+
+# Test software sound trigger
+uv run python scripts/test_sound_trigger_gpio.py
 ```
 
 ## Architecture
@@ -101,6 +113,27 @@ React UI (WebSocket) ──► Flask Server ──► LaunchMonitor ──► OP
 Logs written to `~/openflight_sessions/session_*.jsonl` with entry types:
 - `session_start`, `session_end` - Session metadata
 - `reading_accepted` - Individual radar readings
-- `shot_detected` - Detected shots with metrics
+- `shot_detected` - Detected shots with metrics (ball_speed, club_speed, spin_rpm, carry_spin_adjusted)
 - `iq_reading` - I/Q streaming detections with SNR/CFAR data
 - `iq_blocks` - Raw I/Q data for post-session analysis
+- `trigger_event` - Trigger accept/reject with latency (for rolling buffer mode)
+- `rolling_buffer_capture` - Raw I/Q samples (4096 each) for offline analysis
+
+## Sound Trigger Hardware
+
+For rolling buffer mode with sound triggering, use the SparkFun SEN-14262:
+
+**Wiring (GPIO Passthrough):**
+```
+SEN-14262 GATE → GPIO17 (pin 11) [input]
+GPIO27 (pin 13) → OPS243-A HOST_INT (J3 Pin 3) [output]
+SEN-14262 VCC → 3.3V (pin 1)
+SEN-14262 GND → GND (pin 6)
+```
+
+**Trigger Latency:**
+| Trigger | Latency |
+|---------|---------|
+| `sound-passthrough` | ~10μs (lgpio C callback) |
+| `sound-gpio` | ~1-18ms (Python S! command) |
+| `speed` | ~5-6ms (radar detection) |

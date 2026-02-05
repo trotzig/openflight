@@ -28,7 +28,12 @@ OpenFlight is an open-source golf launch monitor that measures ball speed using 
 | USB Cable      | Micro USB to connect radar | ~$5       |
 | **Total**      |                            | **~$310** |
 
-See [docs/PARTS.md](docs/PARTS.md) for the full parts list including optional camera module.
+**Optional for spin detection:**
+| Component      | Description                | Cost      |
+| -------------- | -------------------------- | --------- |
+| SparkFun SEN-14262 | Sound detector for rolling buffer trigger | ~$12 |
+
+See [docs/PARTS.md](docs/PARTS.md) for the full parts list including optional camera module and sound trigger wiring.
 
 ## Quick Start
 
@@ -73,6 +78,9 @@ openflight-server --no-camera
 
 # Use rolling buffer mode for spin detection
 openflight-server --mode rolling-buffer
+
+# Rolling buffer with sound trigger (requires SparkFun SEN-14262)
+openflight-server --mode rolling-buffer --trigger sound-passthrough
 ```
 
 Then open http://localhost:8080 in a browser.

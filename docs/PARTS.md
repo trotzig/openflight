@@ -12,6 +12,40 @@ Hardware components for building the OpenFlight golf launch monitor.
 | **Arducam 4mm CS-Mount Lens** | Wide angle lens for HQ Camera | [Amazon](https://www.amazon.com/dp/B088GWZPL1) | $20 |
 | **7" Touchscreen Display** | HMTECH 7" 1024x600 IPS display | [Amazon](https://www.amazon.com/dp/B0D3QB7X4Z) | $46 |
 
+## Sound Trigger (for Rolling Buffer Mode)
+
+The sound trigger enables precise timing of radar captures by detecting the club impact sound. This is essential for spin detection via rolling buffer mode.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **SparkFun SEN-14262** | Sound Detector with envelope/gate outputs | [SparkFun](https://www.sparkfun.com/products/14262) | $12 |
+| **Jumper Wires** | Female-to-female for Pi GPIO connection | Any | $5 |
+
+### Sound Trigger Wiring (GPIO Passthrough Method)
+
+The Pi acts as a voltage booster between the sound detector and radar, providing ultra-low-latency triggering (~10μs):
+
+```
+SparkFun SEN-14262          Raspberry Pi              OPS243-A Radar
+┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│                 │     │                 │     │                  │
+│ VCC ────────────┼─────┼── 3.3V (pin 1)  │     │                  │
+│                 │     │                 │     │                  │
+│ GND ────────────┼─────┼── GND (pin 6) ──┼─────┼── GND            │
+│                 │     │                 │     │                  │
+│ GATE ───────────┼─────┼►► GPIO17 (in)   │     │                  │
+│                 │     │     (pin 11)    │     │                  │
+│                 │     │       │         │     │                  │
+│                 │     │       ▼ lgpio   │     │                  │
+│                 │     │   GPIO27 (out) ─┼─────┼►► HOST_INT       │
+│                 │     │     (pin 13)    │     │   (J3 Pin 3)     │
+└─────────────────┘     └─────────────────┘     └──────────────────┘
+```
+
+**Why GPIO Passthrough?** The SEN-14262 GATE output (~2.5V) is below the OPS243-A HOST_INT threshold (~3.0V). The Pi GPIO input has a lower threshold (~1.8V), so it reliably detects the GATE signal and outputs a clean 3.3V pulse to trigger the radar.
+
+**Trigger Latency:** ~10μs (hardware + C callback) vs ~1-18ms with software S! trigger.
+
 ## IR Illumination (for camera)
 
 | Part | Description | Link | ~Price |
