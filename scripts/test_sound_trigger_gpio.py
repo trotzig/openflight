@@ -29,12 +29,21 @@ import time
 # Add src to path so we can import openflight
 sys.path.insert(0, "src")
 
+# Try to import GPIO libraries
+GPIO_LIB = None
 try:
-    import RPi.GPIO as GPIO
-    GPIO_AVAILABLE = True
+    from gpiozero import Button
+    GPIO_LIB = "gpiozero"
 except ImportError:
-    GPIO_AVAILABLE = False
-    print("WARNING: RPi.GPIO not available. Install with: sudo apt install python3-rpi.gpio")
+    try:
+        import RPi.GPIO as GPIO
+        GPIO_LIB = "rpigpio"
+    except ImportError:
+        pass
+
+if not GPIO_LIB:
+    print("WARNING: No GPIO library available.")
+    print("Install with: pip install gpiozero  OR  sudo apt install python3-rpi-lgpio")
 
 from openflight.ops243 import OPS243Radar  # noqa: E402
 from openflight.rolling_buffer.processor import RollingBufferProcessor  # noqa: E402
@@ -115,16 +124,31 @@ def run(port: str, gpio_pin: int, pre_trigger_segments: int,
         swings_only: bool, debounce_ms: int):
     """Connect to radar, configure rolling buffer, wait for GPIO triggers."""
 
-    if not GPIO_AVAILABLE:
-        print("ERROR: RPi.GPIO is required for GPIO-assisted triggering.")
-        print("Install with: sudo apt install python3-rpi.gpio")
+    if not GPIO_LIB:
+        print("ERROR: GPIO library required for GPIO-assisted triggering.")
+        print("Install with: pip install gpiozero")
         sys.exit(1)
 
     # --- Set up GPIO ---
-    print(f"Setting up GPIO{gpio_pin} for GATE input...")
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(gpio_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-    print(f"GPIO{gpio_pin} configured with pull-down resistor")
+    print(f"Setting up GPIO{gpio_pin} for GATE input (using {GPIO_LIB})...")
+
+    # Track trigger events
+    trigger_event = {"triggered": False}
+
+    if GPIO_LIB == "gpiozero":
+        # gpiozero approach - simpler and more compatible
+        button = Button(gpio_pin, pull_up=False, bounce_time=debounce_ms / 1000.0)
+
+        def on_trigger():
+            trigger_event["triggered"] = True
+
+        button.when_pressed = on_trigger
+        print(f"GPIO{gpio_pin} configured with gpiozero (pull-down, bounce={debounce_ms}ms)")
+    else:
+        # RPi.GPIO approach
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(gpio_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        print(f"GPIO{gpio_pin} configured with RPi.GPIO (pull-down)")
 
     # --- Connect to radar ---
     print("Connecting to radar...")
@@ -164,16 +188,25 @@ def run(port: str, gpio_pin: int, pre_trigger_segments: int,
     try:
         while True:
             # Wait for rising edge on GPIO (GATE going HIGH)
-            channel = GPIO.wait_for_edge(gpio_pin, GPIO.RISING, timeout=1000)
+            if GPIO_LIB == "gpiozero":
+                # gpiozero - check for trigger event
+                if not trigger_event["triggered"]:
+                    time.sleep(0.1)
+                    # Print dot every second
+                    if int(time.time()) % 10 == 0 and int(time.time() * 10) % 10 == 0:
+                        print(".", end="", flush=True)
+                    continue
+                trigger_event["triggered"] = False
+            else:
+                # RPi.GPIO - wait for edge
+                channel = GPIO.wait_for_edge(gpio_pin, GPIO.RISING, timeout=1000)
+                if channel is None:
+                    print(".", end="", flush=True)
+                    continue
 
-            if channel is None:
-                # Timeout - no edge detected, just keep waiting
-                print(".", end="", flush=True)
-                continue
-
-            # Debounce - ignore triggers too close together
+            # Debounce - ignore triggers too close together (for RPi.GPIO)
             now = time.time()
-            if (now - last_trigger_time) * 1000 < debounce_ms:
+            if GPIO_LIB != "gpiozero" and (now - last_trigger_time) * 1000 < debounce_ms:
                 continue
             last_trigger_time = now
 
@@ -214,7 +247,10 @@ def run(port: str, gpio_pin: int, pre_trigger_segments: int,
 
     finally:
         print("Cleaning up GPIO...")
-        GPIO.cleanup()
+        if GPIO_LIB == "gpiozero":
+            button.close()
+        elif GPIO_LIB == "rpigpio":
+            GPIO.cleanup()
         print("Disconnecting radar...")
         radar.disable_rolling_buffer()
         radar.disconnect()
