@@ -2,19 +2,15 @@
 """
 Debug script for GPIO passthrough trigger.
 
-Tests each component separately:
-1. GPIO input - is GATE signal being detected?
-2. GPIO output - can we manually pulse HOST_INT?
-3. Radar response - does radar respond to HOST_INT pulse?
+Comprehensive debugging for HOST_INT triggering:
+1. Reset radar to clean state
+2. Test software S! trigger (verify rolling buffer works)
+3. Test GPIO pulse to HOST_INT
 
 Usage:
-    uv run python scripts/debug_gpio_passthrough.py --test input   # Test GATE detection
-    uv run python scripts/debug_gpio_passthrough.py --test output  # Test HOST_INT pulse
-    uv run python scripts/debug_gpio_passthrough.py --test radar   # Test radar response
-    uv run python scripts/debug_gpio_passthrough.py --test all     # Run all tests
+    python scripts/debug_gpio_passthrough.py
 """
 
-import argparse
 import sys
 import time
 
@@ -26,171 +22,9 @@ try:
     LGPIO_AVAILABLE = True
 except ImportError:
     LGPIO_AVAILABLE = False
-    print("WARNING: lgpio not available - GPIO tests will be skipped")
+    print("WARNING: lgpio not available")
 
-DEFAULT_INPUT_PIN = 17   # GATE input
 DEFAULT_OUTPUT_PIN = 27  # HOST_INT output
-
-
-def test_gpio_input(input_pin: int, duration: float = 10.0):
-    """Test if we can detect GATE signal on input pin."""
-    if not LGPIO_AVAILABLE:
-        print("SKIP: lgpio not available")
-        return False
-
-    print(f"\n=== Testing GPIO Input (GPIO{input_pin}) ===")
-    print(f"Monitoring for {duration} seconds...")
-    print("Make some noise near the SEN-14262 microphone!")
-    print()
-
-    handle = lgpio.gpiochip_open(0)
-
-    # Must use gpio_claim_alert for edge detection callbacks
-    lgpio.gpio_claim_alert(handle, input_pin, lgpio.BOTH_EDGES, lgpio.SET_PULL_DOWN)
-
-    edge_count = 0
-    last_level = 0
-
-    def on_edge(chip, gpio, level, tick):
-        nonlocal edge_count, last_level
-        edge_count += 1
-        direction = "RISING" if level == 1 else "FALLING"
-        print(f"  Edge #{edge_count}: {direction} (level={level})")
-        last_level = level
-
-    cb = lgpio.callback(handle, input_pin, lgpio.BOTH_EDGES, on_edge)
-
-    # Also poll the current level
-    print(f"Current level: {lgpio.gpio_read(handle, input_pin)}")
-    print()
-    print("Waiting for edges...")
-
-    start = time.time()
-    while time.time() - start < duration:
-        time.sleep(0.1)
-        # Print a dot every second to show we're alive
-        if int(time.time() - start) != int(time.time() - start - 0.1):
-            current = lgpio.gpio_read(handle, input_pin)
-            print(f"  [{time.time() - start:.0f}s] level={current}, edges={edge_count}")
-
-    cb.cancel()
-    lgpio.gpiochip_close(handle)
-
-    print()
-    if edge_count > 0:
-        print(f"SUCCESS: Detected {edge_count} edges on GPIO{input_pin}")
-        return True
-    else:
-        print(f"FAIL: No edges detected on GPIO{input_pin}")
-        print()
-        print("Troubleshooting:")
-        print("  1. Check SEN-14262 is powered (VCC → 3.3V, GND → GND)")
-        print("  2. Check GATE wire is connected to correct Pi pin")
-        print(f"     GPIO{input_pin} = Physical pin {gpio_to_physical(input_pin)}")
-        print("  3. Try adjusting the sensitivity pot on SEN-14262")
-        print("  4. Check if the GATE LED on SEN-14262 flashes with sound")
-        return False
-
-
-def test_gpio_output(output_pin: int):
-    """Test if we can pulse the output pin."""
-    if not LGPIO_AVAILABLE:
-        print("SKIP: lgpio not available")
-        return False
-
-    print(f"\n=== Testing GPIO Output (GPIO{output_pin}) ===")
-    print("This will pulse the output pin 5 times.")
-    print("If you have an LED or multimeter on this pin, you should see it pulse.")
-    print()
-
-    handle = lgpio.gpiochip_open(0)
-    lgpio.gpio_claim_output(handle, output_pin, 0)
-
-    print(f"Initial state: LOW")
-
-    for i in range(5):
-        print(f"  Pulse {i+1}/5: HIGH...", end="", flush=True)
-        lgpio.gpio_write(handle, output_pin, 1)
-        time.sleep(0.5)
-        print(" LOW")
-        lgpio.gpio_write(handle, output_pin, 0)
-        time.sleep(0.5)
-
-    lgpio.gpiochip_close(handle)
-
-    print()
-    print(f"SUCCESS: Pulsed GPIO{output_pin} 5 times")
-    print(f"If HOST_INT is connected, radar should have received 5 trigger pulses")
-    return True
-
-
-def test_radar_response(port: str = None, output_pin: int = DEFAULT_OUTPUT_PIN):
-    """Test if radar responds to HOST_INT pulse."""
-    print(f"\n=== Testing Radar Response to HOST_INT ===")
-
-    from openflight.ops243 import OPS243Radar
-
-    print("Connecting to radar...")
-    radar = OPS243Radar(port=port if port else None)
-    radar.connect()
-    print(f"Connected on {radar.port}")
-
-    # Get firmware info
-    info = radar.get_info()
-    print(f"Firmware: {info.get('Version', 'unknown')}")
-
-    # Configure rolling buffer mode
-    print()
-    print("Configuring rolling buffer mode...")
-    radar.configure_for_rolling_buffer()
-    radar.set_trigger_split(12)  # 12 pre-trigger segments
-    print("Radar configured for rolling buffer with hardware trigger")
-
-    if LGPIO_AVAILABLE:
-        print()
-        print(f"Setting up GPIO{output_pin} for HOST_INT pulse...")
-        handle = lgpio.gpiochip_open(0)
-        lgpio.gpio_claim_output(handle, output_pin, 0)
-
-        print()
-        print("Sending manual trigger pulse to HOST_INT...")
-        lgpio.gpio_write(handle, output_pin, 1)
-        time.sleep(0.0001)  # 100μs pulse
-        lgpio.gpio_write(handle, output_pin, 0)
-        print("Pulse sent!")
-
-        lgpio.gpiochip_close(handle)
-    else:
-        print()
-        print("lgpio not available - sending S! software trigger instead...")
-        # Fall back to software trigger
-        radar._send_command("S!")
-
-    print()
-    print("Waiting for radar response (5 second timeout)...")
-
-    response = radar.wait_for_hardware_trigger(timeout=5.0)
-
-    radar.disable_rolling_buffer()
-    radar.disconnect()
-
-    if response:
-        print()
-        print(f"SUCCESS: Radar responded with {len(response)} bytes of I/Q data!")
-        print(f"First 100 chars: {response[:100]}...")
-        return True
-    else:
-        print()
-        print("FAIL: No response from radar")
-        print()
-        print("Troubleshooting:")
-        print("  1. Check HOST_INT wiring:")
-        print(f"     GPIO{output_pin} (physical pin {gpio_to_physical(output_pin)}) → J3 Pin 3 on radar")
-        print("  2. Ensure GND is shared between Pi and radar")
-        print("  3. Check radar firmware supports rolling buffer mode")
-        print("  4. Try the S! software trigger as fallback:")
-        print("     uv run python -c \"from openflight.ops243 import OPS243Radar; r=OPS243Radar(); r.connect(); r.configure_for_rolling_buffer(); print(r._send_command('S!')[:200])\"")
-        return False
 
 
 def gpio_to_physical(bcm_pin: int) -> int:
@@ -206,68 +40,350 @@ def gpio_to_physical(bcm_pin: int) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Debug GPIO passthrough trigger components",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--test", "-t",
-        choices=["input", "output", "radar", "all"],
-        default="all",
-        help="Which test to run (default: all)"
-    )
-    parser.add_argument(
-        "--gpio-input", "-i", type=int, default=DEFAULT_INPUT_PIN,
-        help=f"GPIO input pin for GATE (default: {DEFAULT_INPUT_PIN})"
-    )
-    parser.add_argument(
-        "--gpio-output", "-o", type=int, default=DEFAULT_OUTPUT_PIN,
-        help=f"GPIO output pin for HOST_INT (default: {DEFAULT_OUTPUT_PIN})"
-    )
-    parser.add_argument(
-        "--port", "-p",
-        help="Serial port for radar (auto-detect if not specified)"
-    )
-    parser.add_argument(
-        "--duration", "-d", type=float, default=10.0,
-        help="Duration for input test in seconds (default: 10)"
-    )
+    from openflight.ops243 import OPS243Radar
 
-    args = parser.parse_args()
+    output_pin = DEFAULT_OUTPUT_PIN
 
-    print("=" * 60)
-    print("  GPIO Passthrough Trigger Debugger")
-    print("=" * 60)
+    print("=" * 70)
+    print("  GPIO Passthrough HOST_INT Debugger")
+    print("=" * 70)
     print()
-    print("Pin Configuration:")
-    print(f"  Input:  GPIO{args.gpio_input} (physical pin {gpio_to_physical(args.gpio_input)}) ← GATE")
-    print(f"  Output: GPIO{args.gpio_output} (physical pin {gpio_to_physical(args.gpio_output)}) → HOST_INT")
+    print(f"GPIO Output Pin: GPIO{output_pin} (physical pin {gpio_to_physical(output_pin)})")
+    print()
 
-    results = {}
+    # =========================================================================
+    # STEP 1: Connect and reset radar
+    # =========================================================================
+    print("-" * 70)
+    print("STEP 1: Connect and reset radar")
+    print("-" * 70)
 
-    if args.test in ["input", "all"]:
-        results["input"] = test_gpio_input(args.gpio_input, args.duration)
+    print("Connecting to radar...")
+    radar = OPS243Radar()
+    radar.connect()
+    print(f"  Connected on: {radar.port}")
 
-    if args.test in ["output", "all"]:
-        results["output"] = test_gpio_output(args.gpio_output)
+    # Get firmware info
+    info = radar.get_info()
+    print(f"  Firmware: {info.get('Version', 'unknown')}")
+    print(f"  Product: {info.get('Product', 'unknown')}")
 
-    if args.test in ["radar", "all"]:
-        results["radar"] = test_radar_response(args.port, args.gpio_output)
+    # Full reset
+    print()
+    print("Resetting radar to clean state...")
+    print("  Sending OX (factory reset)...")
+    response = radar._send_command("OX")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.5)
+
+    print("  Sending PI (deactivate)...")
+    response = radar._send_command("PI")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.2)
 
     print()
-    print("=" * 60)
-    print("  Summary")
-    print("=" * 60)
-    for test_name, passed in results.items():
-        status = "PASS ✓" if passed else "FAIL ✗"
-        print(f"  {test_name}: {status}")
+    print("Radar reset complete.")
 
-    if all(results.values()):
+    # =========================================================================
+    # STEP 2: Configure rolling buffer mode
+    # =========================================================================
+    print()
+    print("-" * 70)
+    print("STEP 2: Configure rolling buffer mode")
+    print("-" * 70)
+
+    print("Sending configuration commands...")
+
+    print("  UC (set units to MPH)...")
+    radar._send_command("UC")
+    time.sleep(0.1)
+
+    print("  PI (deactivate)...")
+    radar._send_command("PI")
+    time.sleep(0.1)
+
+    print("  GC (enable rolling buffer / continuous sampling)...")
+    response = radar._send_command("GC")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.1)
+
+    print("  S=30000 (set sample rate 30ksps)...")
+    response = radar._send_command("S=30000")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.1)
+
+    print("  S#12 (set pre-trigger segments)...")
+    response = radar._send_command("S#12")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.1)
+
+    print("  PA (activate)...")
+    response = radar._send_command("PA")
+    print(f"    Response: {response[:100] if response else 'None'}")
+    time.sleep(0.2)
+
+    # Verify configuration
+    print()
+    print("Verifying configuration...")
+    print("  S? (query sample rate)...")
+    response = radar._send_command("S?")
+    print(f"    Response: {response}")
+
+    print("  G? (query mode)...")
+    response = radar._send_command("G?")
+    print(f"    Response: {response}")
+
+    print()
+    print("Rolling buffer mode configured.")
+
+    # =========================================================================
+    # STEP 3: Test software trigger (S!)
+    # =========================================================================
+    print()
+    print("-" * 70)
+    print("STEP 3: Test software trigger (S!)")
+    print("-" * 70)
+
+    print("Sending S! command...")
+    start_time = time.perf_counter()
+
+    # Clear buffer first
+    radar.serial.reset_input_buffer()
+
+    # Send S! and read response
+    radar.serial.write(b"S!\r")
+    radar.serial.flush()
+
+    # Read response with timeout
+    response_lines = []
+    deadline = time.time() + 5.0
+
+    while time.time() < deadline:
+        if radar.serial.in_waiting > 0:
+            line = radar.serial.readline().decode('utf-8', errors='ignore').strip()
+            if line:
+                response_lines.append(line)
+                # Check if we got I/Q data
+                if '"Q"' in line:
+                    break
+        else:
+            time.sleep(0.01)
+
+    elapsed = (time.perf_counter() - start_time) * 1000
+
+    if response_lines:
+        print(f"  Response received in {elapsed:.1f}ms")
+        print(f"  Lines received: {len(response_lines)}")
+        for i, line in enumerate(response_lines):
+            preview = line[:80] + "..." if len(line) > 80 else line
+            print(f"    [{i}]: {preview}")
+
+        # Check for I/Q data
+        full_response = '\n'.join(response_lines)
+        has_i = '"I"' in full_response or '"I":' in full_response
+        has_q = '"Q"' in full_response or '"Q":' in full_response
         print()
-        print("All tests passed! The passthrough trigger should work.")
+        print(f"  Contains I data: {has_i}")
+        print(f"  Contains Q data: {has_q}")
+
+        if has_i and has_q:
+            print()
+            print("  SUCCESS: Software trigger (S!) works!")
+        else:
+            print()
+            print("  WARNING: Response received but no I/Q data found")
     else:
+        print(f"  FAIL: No response after {elapsed:.1f}ms")
+        print("  Rolling buffer mode may not be configured correctly.")
+        radar.disconnect()
+        return
+
+    # Re-arm for next test
+    print()
+    print("Re-arming rolling buffer (sending GC)...")
+    radar._send_command("GC")
+    time.sleep(0.2)
+    radar._send_command("PA")
+    time.sleep(0.2)
+
+    # =========================================================================
+    # STEP 4: Test GPIO pulse to HOST_INT
+    # =========================================================================
+    print()
+    print("-" * 70)
+    print("STEP 4: Test GPIO pulse to HOST_INT")
+    print("-" * 70)
+
+    if not LGPIO_AVAILABLE:
+        print("SKIP: lgpio not available")
+        radar.disconnect()
+        return
+
+    print(f"Setting up GPIO{output_pin}...")
+    h = lgpio.gpiochip_open(0)
+    lgpio.gpio_claim_output(h, output_pin, 0)
+    print(f"  GPIO{output_pin} configured as output, currently LOW")
+
+    # Clear serial buffer
+    radar.serial.reset_input_buffer()
+
+    # Test 1: Rising edge (LOW -> HIGH)
+    print()
+    print("Test 4a: Rising edge trigger (LOW → HIGH → LOW)")
+    print(f"  Pulsing GPIO{output_pin} HIGH for 10ms...")
+
+    start_time = time.perf_counter()
+    lgpio.gpio_write(h, output_pin, 1)
+    time.sleep(0.010)  # 10ms pulse
+    lgpio.gpio_write(h, output_pin, 0)
+    print("  Pulse sent!")
+
+    # Wait for response
+    print("  Waiting for radar response (3s timeout)...")
+    response_lines = []
+    deadline = time.time() + 3.0
+
+    while time.time() < deadline:
+        if radar.serial.in_waiting > 0:
+            line = radar.serial.readline().decode('utf-8', errors='ignore').strip()
+            if line:
+                response_lines.append(line)
+                if '"Q"' in line:
+                    break
+        else:
+            time.sleep(0.01)
+
+    elapsed = (time.perf_counter() - start_time) * 1000
+
+    if response_lines:
+        print(f"  Response received in {elapsed:.1f}ms!")
+        print(f"  Lines: {len(response_lines)}")
+        for i, line in enumerate(response_lines[:5]):
+            preview = line[:60] + "..." if len(line) > 60 else line
+            print(f"    [{i}]: {preview}")
         print()
-        print("Some tests failed. Check the troubleshooting info above.")
+        print("  SUCCESS: Rising edge trigger works!")
+    else:
+        print(f"  No response after {elapsed:.1f}ms")
+
+        # Re-arm and try falling edge
+        print()
+        print("Re-arming rolling buffer...")
+        radar._send_command("GC")
+        time.sleep(0.2)
+        radar._send_command("PA")
+        time.sleep(0.2)
+        radar.serial.reset_input_buffer()
+
+        print()
+        print("Test 4b: Falling edge trigger (HIGH → LOW → HIGH)")
+        lgpio.gpio_write(h, output_pin, 1)
+        time.sleep(0.1)  # Start HIGH
+        print(f"  GPIO{output_pin} now HIGH, pulsing LOW for 10ms...")
+
+        start_time = time.perf_counter()
+        lgpio.gpio_write(h, output_pin, 0)
+        time.sleep(0.010)
+        lgpio.gpio_write(h, output_pin, 1)
+        print("  Pulse sent!")
+
+        # Wait for response
+        print("  Waiting for radar response (3s timeout)...")
+        response_lines = []
+        deadline = time.time() + 3.0
+
+        while time.time() < deadline:
+            if radar.serial.in_waiting > 0:
+                line = radar.serial.readline().decode('utf-8', errors='ignore').strip()
+                if line:
+                    response_lines.append(line)
+                    if '"Q"' in line:
+                        break
+            else:
+                time.sleep(0.01)
+
+        elapsed = (time.perf_counter() - start_time) * 1000
+
+        if response_lines:
+            print(f"  Response received in {elapsed:.1f}ms!")
+            print(f"  Lines: {len(response_lines)}")
+            print()
+            print("  SUCCESS: Falling edge trigger works!")
+        else:
+            print(f"  No response after {elapsed:.1f}ms")
+
+            # Try level-triggered (hold HIGH)
+            print()
+            print("Re-arming rolling buffer...")
+            radar._send_command("GC")
+            time.sleep(0.2)
+            radar._send_command("PA")
+            time.sleep(0.2)
+            radar.serial.reset_input_buffer()
+
+            print()
+            print("Test 4c: Level trigger (hold HIGH for 500ms)")
+            lgpio.gpio_write(h, output_pin, 0)
+            time.sleep(0.1)
+
+            start_time = time.perf_counter()
+            print(f"  Setting GPIO{output_pin} HIGH and holding...")
+            lgpio.gpio_write(h, output_pin, 1)
+
+            # Wait for response while holding HIGH
+            response_lines = []
+            deadline = time.time() + 3.0
+
+            while time.time() < deadline:
+                if radar.serial.in_waiting > 0:
+                    line = radar.serial.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        response_lines.append(line)
+                        if '"Q"' in line:
+                            break
+                else:
+                    time.sleep(0.01)
+
+            lgpio.gpio_write(h, output_pin, 0)
+            elapsed = (time.perf_counter() - start_time) * 1000
+
+            if response_lines:
+                print(f"  Response received in {elapsed:.1f}ms!")
+                print()
+                print("  SUCCESS: Level trigger works!")
+            else:
+                print(f"  No response after {elapsed:.1f}ms")
+                print()
+                print("  FAIL: HOST_INT not responding to GPIO pulse")
+                print()
+                print("  Troubleshooting:")
+                print("    1. Verify wire is connected to J3 PIN 3 (HOST_INT)")
+                print("       J3 pinout: Pin1=GND, Pin2=TRIG_OUT, Pin3=HOST_INT, Pin4=VCC")
+                print("    2. Add direct GND jumper: Pi GND (pin 6) → J3 Pin 1")
+                print("    3. Check for loose connections")
+                print("    4. Try a different GPIO pin")
+
+    lgpio.gpiochip_close(h)
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    print()
+    print("-" * 70)
+    print("SUMMARY")
+    print("-" * 70)
+    print("  Software trigger (S!): WORKS")
+    if response_lines:
+        print("  Hardware trigger (HOST_INT): WORKS")
+    else:
+        print("  Hardware trigger (HOST_INT): FAILED")
+        print()
+        print("  The radar responds to S! but not to HOST_INT pulse.")
+        print("  This suggests a wiring issue or HOST_INT configuration issue.")
+
+    radar.disconnect()
+    print()
+    print("Done.")
 
 
 if __name__ == "__main__":
