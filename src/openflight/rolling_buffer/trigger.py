@@ -409,6 +409,163 @@ class SpeedTriggeredCapture(TriggerStrategy):
         return self._last_trigger_speed
 
 
+class GPIOSoundTrigger(TriggerStrategy):
+    """
+    GPIO-assisted sound trigger using SparkFun SEN-14262.
+
+    Wiring: SEN-14262 GATE → Pi GPIO pin (default: GPIO17, physical pin 11)
+
+    This is a workaround for voltage level issues where the SEN-14262 GATE
+    doesn't reach the 3.3V threshold required by HOST_INT. The Pi GPIO has
+    a lower voltage threshold (~1.8V vs ~2.0V), making it more reliable.
+
+    How it works:
+        1. Pi GPIO detects rising edge on GATE (lower voltage threshold)
+        2. Python sends S! command to radar to trigger buffer dump
+        3. Script reads and processes I/Q data
+
+    Requires: gpiozero library (uv pip install gpiozero lgpio)
+    """
+
+    def __init__(
+        self,
+        gpio_pin: int = 17,
+        pre_trigger_segments: int = 12,
+        debounce_ms: int = 200,
+    ):
+        """
+        Initialize GPIO-assisted sound trigger.
+
+        Args:
+            gpio_pin: GPIO pin (BCM numbering) for GATE input (default: 17)
+            pre_trigger_segments: Number of pre-trigger segments for S# command.
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+            debounce_ms: Debounce time in ms to ignore rapid triggers (default: 200)
+        """
+        self.gpio_pin = gpio_pin
+        self.pre_trigger_segments = pre_trigger_segments
+        self.debounce_ms = debounce_ms
+        self._split_configured = False
+        self._button = None
+        self._trigger_event = {"triggered": False}
+        self._gpio_initialized = False
+
+    def _init_gpio(self):
+        """Initialize GPIO - called lazily on first wait_for_trigger."""
+        if self._gpio_initialized:
+            return True
+
+        try:
+            from gpiozero import Button  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            logger.error("gpiozero not available. Install with: uv pip install gpiozero lgpio")
+            return False
+
+        def on_trigger():
+            self._trigger_event["triggered"] = True
+
+        self._button = Button(
+            self.gpio_pin,
+            pull_up=False,
+            bounce_time=self.debounce_ms / 1000.0
+        )
+        self._button.when_pressed = on_trigger
+        self._gpio_initialized = True
+
+        logger.info(
+            "GPIO%d configured for sound trigger (debounce=%dms)",
+            self.gpio_pin, self.debounce_ms
+        )
+        return True
+
+    def wait_for_trigger(
+        self,
+        radar: "OPS243Radar",
+        processor: RollingBufferProcessor,
+        timeout: float = 30.0,
+    ) -> Optional[IQCapture]:
+        """
+        Wait for GPIO sound trigger and capture buffer.
+
+        Unlike direct SoundTrigger (HOST_INT), this uses Pi GPIO to detect
+        the SEN-14262 GATE signal, then sends S! to trigger the capture.
+        """
+        if not self._init_gpio():
+            logger.error("GPIO initialization failed")
+            return None
+
+        # Set pre-trigger split once (persists across captures)
+        if not self._split_configured:
+            radar.set_trigger_split(self.pre_trigger_segments)
+            self._split_configured = True
+
+        logger.info(
+            "Waiting for GPIO sound trigger on GPIO%d (timeout=%ss, S#%s)...",
+            self.gpio_pin, timeout, self.pre_trigger_segments
+        )
+
+        start_time = time.time()
+        self._trigger_event["triggered"] = False
+
+        while (time.time() - start_time) < timeout:
+            if self._trigger_event["triggered"]:
+                self._trigger_event["triggered"] = False
+                logger.info("GPIO edge detected! Triggering radar capture...")
+
+                # Send S! to trigger the radar capture
+                response = radar.trigger_capture(timeout=5.0)
+
+                if not response:
+                    logger.warning("No response from radar after S! trigger")
+                    radar.rearm_rolling_buffer()
+                    continue
+
+                logger.info("Capture received, %d bytes", len(response))
+
+                # Re-arm for next capture
+                radar.rearm_rolling_buffer()
+
+                capture = processor.parse_capture(response)
+
+                if not capture:
+                    return None
+
+                # Quick validation: does the capture contain any real swing data?
+                timeline = processor.process_standard(capture)
+                outbound = [
+                    r for r in timeline.readings
+                    if r.is_outbound and r.speed_mph >= 15.0
+                ]
+
+                if not outbound:
+                    logger.info("GPIO trigger: no swing detected in capture, re-arming")
+                    return None
+
+                peak = max(r.speed_mph for r in outbound)
+                logger.info("GPIO trigger capture: %d readings, peak %.1f mph",
+                           len(outbound), peak)
+
+                return capture
+
+            time.sleep(0.01)  # 10ms poll interval
+
+        logger.info("GPIO sound trigger timeout - no trigger received")
+        return None
+
+    def reset(self):
+        """Reset trigger state."""
+        self._split_configured = False
+        self._trigger_event["triggered"] = False
+
+    def cleanup(self):
+        """Clean up GPIO resources."""
+        if self._button:
+            self._button.close()
+            self._button = None
+            self._gpio_initialized = False
+
+
 class SoundTrigger(TriggerStrategy):
     """
     Hardware sound trigger using SparkFun SEN-14262.
@@ -419,6 +576,9 @@ class SoundTrigger(TriggerStrategy):
 
     No software trigger (S!) needed — the radar triggers itself
     via hardware. We just need to wait for data to appear on serial.
+
+    Note: If GATE voltage doesn't reach 3.3V threshold, use GPIOSoundTrigger
+    instead, which uses Pi GPIO (lower threshold) + software S! trigger.
     """
 
     def __init__(
@@ -507,7 +667,8 @@ def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:
     Factory function to create trigger strategy.
 
     Args:
-        trigger_type: "speed" (recommended), "polling", "threshold", "manual", or "sound"
+        trigger_type: "speed" (recommended), "polling", "threshold", "manual",
+                      "sound", or "sound-gpio"
         **kwargs: Arguments passed to trigger constructor
 
     Returns:
@@ -519,7 +680,11 @@ def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:
         - "polling": Continuously capture and check for activity. Simple but slow.
         - "threshold": Speed threshold triggers capture. Less efficient than "speed".
         - "manual": External trigger for testing.
-        - "sound": Hardware sound trigger via SparkFun SEN-14262. <1ms response.
+        - "sound": Hardware sound trigger via SparkFun SEN-14262 GATE → HOST_INT.
+                   Requires GATE voltage to reach 3.3V threshold.
+        - "sound-gpio": GPIO-assisted sound trigger via Pi GPIO + S! command.
+                        Use when GATE voltage doesn't reach HOST_INT threshold.
+                        Requires gpiozero library.
     """
     triggers = {
         "speed": SpeedTriggeredCapture,
@@ -527,6 +692,7 @@ def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:
         "threshold": ThresholdTrigger,
         "manual": ManualTrigger,
         "sound": SoundTrigger,
+        "sound-gpio": GPIOSoundTrigger,
     }
 
     if trigger_type not in triggers:

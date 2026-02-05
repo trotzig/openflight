@@ -912,7 +912,7 @@ def main():
     )
     parser.add_argument(
         "--trigger",
-        choices=["polling", "threshold", "speed", "sound"],
+        choices=["polling", "threshold", "speed", "sound", "sound-gpio"],
         default="polling",
         help="Trigger strategy for rolling-buffer mode (default: polling)"
     )
@@ -920,6 +920,16 @@ def main():
         "--sound-pre-trigger",
         type=int, default=12,
         help="Pre-trigger segments for sound trigger (default: 12, each ~4.27ms at 30ksps)"
+    )
+    parser.add_argument(
+        "--gpio-pin",
+        type=int, default=17,
+        help="GPIO pin (BCM numbering) for sound-gpio trigger (default: 17, physical pin 11)"
+    )
+    parser.add_argument(
+        "--gpio-debounce",
+        type=int, default=200,
+        help="Debounce time in ms for sound-gpio trigger (default: 200)"
     )
     args = parser.parse_args()
 
@@ -965,6 +975,10 @@ def main():
     trigger_kwargs = {}
     if args.trigger == "sound":
         trigger_kwargs["pre_trigger_segments"] = args.sound_pre_trigger
+    elif args.trigger == "sound-gpio":
+        trigger_kwargs["gpio_pin"] = args.gpio_pin
+        trigger_kwargs["pre_trigger_segments"] = args.sound_pre_trigger
+        trigger_kwargs["debounce_ms"] = args.gpio_debounce
 
     start_monitor(
         port=args.port,
