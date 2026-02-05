@@ -9,12 +9,15 @@ This helps isolate whether the issue is:
 
 Usage:
     uv run python scripts/debug_gpio_output.py
+    uv run python scripts/debug_gpio_output.py --max-drive   # Use 16mA drive strength
 
 While running, measure with multimeter:
     - Between GPIO27 (physical pin 13) and GND (physical pin 14)
     - Should see 0V → 3.3V → 0V cycling every 2 seconds
 """
 
+import argparse
+import subprocess
 import sys
 import time
 
@@ -28,11 +31,74 @@ except ImportError:
 OUTPUT_PIN = 27  # BCM 27 = Physical pin 13
 
 
+def set_pad_drive_strength(strength_ma: int = 16):
+    """
+    Set GPIO pad drive strength using raspi-gpio or pinctrl.
+
+    GPIO27 is on pad group 0 (GPIOs 0-27).
+    Valid strengths: 2, 4, 6, 8, 10, 12, 14, 16 mA
+    """
+    print(f"Setting GPIO pad drive strength to {strength_ma}mA...")
+
+    # Try raspi-gpio first (older Pi OS)
+    try:
+        result = subprocess.run(
+            ["raspi-gpio", "pads", "0", str(strength_ma)],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print(f"  Set via raspi-gpio: pad 0 = {strength_ma}mA")
+            return True
+        else:
+            print(f"  raspi-gpio failed: {result.stderr.strip()}")
+    except FileNotFoundError:
+        print("  raspi-gpio not found, trying pinctrl...")
+
+    # Try pinctrl (newer Pi OS / Pi 5)
+    try:
+        result = subprocess.run(
+            ["pinctrl", "set", str(OUTPUT_PIN), f"op", f"dl"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print(f"  pinctrl configured GPIO{OUTPUT_PIN} as output")
+    except FileNotFoundError:
+        print("  pinctrl not found")
+
+    # Suggest manual command
+    print()
+    print("  To manually set max drive strength, run:")
+    print(f"    sudo raspi-gpio pads 0 {strength_ma}")
+    print("  Or on Pi 5:")
+    print(f"    sudo pinctrl set {OUTPUT_PIN} op")
+    print()
+    return False
+
+
 def main():
+    parser = argparse.ArgumentParser(description="GPIO output diagnostic")
+    parser.add_argument(
+        "--max-drive", "-m", action="store_true",
+        help="Set maximum GPIO drive strength (16mA)"
+    )
+    parser.add_argument(
+        "--drive-strength", "-d", type=int, default=16,
+        choices=[2, 4, 6, 8, 10, 12, 14, 16],
+        help="GPIO drive strength in mA (default: 16)"
+    )
+    args = parser.parse_args()
+
     print("=" * 70)
     print("  GPIO Output Diagnostic")
     print("=" * 70)
     print()
+
+    if args.max_drive:
+        set_pad_drive_strength(args.drive_strength)
+        print()
+
     print("This script toggles GPIO27 HIGH/LOW every 2 seconds.")
     print("Use a multimeter to verify voltage output.")
     print()
