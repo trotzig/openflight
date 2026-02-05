@@ -56,7 +56,7 @@ def test_gpio_input(input_pin: int, duration: float = 10.0):
         print(f"  Edge #{edge_count}: {direction} (level={level})")
         last_level = level
 
-    callback_id = lgpio.callback(handle, input_pin, lgpio.EITHER_EDGE, on_edge)
+    callback_id = lgpio.callback(handle, input_pin, lgpio.BOTH_EDGES, on_edge)
 
     # Also poll the current level
     print(f"Current level: {lgpio.gpio_read(handle, input_pin)}")
