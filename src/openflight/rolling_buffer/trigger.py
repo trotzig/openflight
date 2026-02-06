@@ -499,6 +499,10 @@ class GPIOSoundTrigger(TriggerStrategy):
         if not self._split_configured:
             radar.set_trigger_split(self.pre_trigger_segments)
             self._split_configured = True
+            # Wait for rolling buffer to fill with data
+            # At 30ksps, 4096 samples takes ~137ms, but we wait longer to ensure stable state
+            logger.info("Waiting for buffer to fill...")
+            time.sleep(0.5)
 
         logger.info(
             "Waiting for GPIO sound trigger on GPIO%d (timeout=%ss, S#%s)...",
@@ -519,17 +523,26 @@ class GPIOSoundTrigger(TriggerStrategy):
                 if not response:
                     logger.warning("No response from radar after S! trigger")
                     radar.rearm_rolling_buffer()
+                    time.sleep(0.3)  # Extra time for buffer to fill
                     continue
 
                 logger.info("Capture received, %d bytes", len(response))
+                # Debug: log first 500 chars of response to see what we got
+                if len(response) < 5000:
+                    logger.info("Response content: %s", repr(response))
+                else:
+                    logger.info("Response preview: %s...", repr(response[:500]))
 
                 # Re-arm for next capture
                 radar.rearm_rolling_buffer()
+                time.sleep(0.3)  # Extra time for buffer to fill before next trigger
 
                 capture = processor.parse_capture(response)
 
                 if not capture:
-                    return None
+                    # Failed to parse - log and continue waiting for next trigger
+                    logger.warning("Failed to parse capture, continuing to wait for next trigger...")
+                    continue
 
                 # Quick validation: does the capture contain any real swing data?
                 timeline = processor.process_standard(capture)
@@ -552,7 +565,8 @@ class GPIOSoundTrigger(TriggerStrategy):
                         len(all_readings), len(all_outbound), peak_outbound,
                         len(all_inbound), peak_inbound
                     )
-                    return None
+                    # Continue waiting for next trigger instead of exiting
+                    continue
 
                 peak = max(r.speed_mph for r in outbound)
                 logger.info(

@@ -126,7 +126,16 @@ class RollingBufferProcessor:
                 missing.append("I")
             if q_samples is None:
                 missing.append("Q")
-            logger.warning(f"Incomplete capture (missing: {', '.join(missing)})")
+
+            # Include response preview in warning for debugging
+            if len(response) < 500:
+                response_preview = repr(response)
+            else:
+                response_preview = repr(response[:500]) + "..."
+            logger.warning(
+                "Incomplete capture (missing: %s). Response (%d bytes): %s",
+                ', '.join(missing), len(response), response_preview
+            )
             return None
 
         except Exception as e:

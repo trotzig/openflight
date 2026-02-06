@@ -1018,11 +1018,17 @@ class OPS243Radar:
 
         After trigger_capture() outputs data, the sensor pauses in Idle mode.
         Send GC again to restart sampling for next capture.
+
+        Per testing, adequate delays are needed:
+        - 0.1s after GC for mode switch
+        - 0.2s after PA for buffer to start filling
         """
+        if self.serial:
+            self.serial.reset_input_buffer()
         self._send_command("GC")  # Re-enable rolling buffer mode
-        time.sleep(0.05)
+        time.sleep(0.1)
         self._send_command("PA")  # Activate sampling
-        time.sleep(0.05)
+        time.sleep(0.2)  # Allow buffer to start filling
 
     def configure_for_rolling_buffer(self):
         """
