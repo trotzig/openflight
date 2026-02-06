@@ -948,6 +948,17 @@ def main():
     )
     args = parser.parse_args()
 
+    # Configure logging - always show INFO and above for openflight modules
+    # This ensures trigger events and important messages are visible
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    # Set rolling buffer logger to INFO so trigger events are visible
+    logging.getLogger("openflight.rolling_buffer").setLevel(logging.INFO)
+    logging.getLogger("openflight.rolling_buffer.trigger").setLevel(logging.INFO)
+    logging.getLogger("openflight.rolling_buffer.monitor").setLevel(logging.INFO)
+
     print("=" * 50)
     print("  OpenFlight UI Server")
     print("=" * 50)

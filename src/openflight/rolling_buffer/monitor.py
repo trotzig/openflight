@@ -317,6 +317,7 @@ class RollingBufferMonitor:
         )
         self._capture_thread.start()
 
+        print(f"[MONITOR] Rolling buffer monitor started (trigger: {self.trigger_type})")
         logger.info("Rolling buffer monitor started")
 
     def stop(self):
@@ -379,6 +380,8 @@ class RollingBufferMonitor:
 
                 if shot:
                     self._shots.append(shot)
+                    print(f"[SHOT] Detected: {shot.ball_speed_mph:.1f} mph, "
+                          f"club={shot.club_speed_mph}, spin={shot.spin_rpm or 'N/A'}")
                     logger.info(
                         f"Shot detected: ball={shot.ball_speed_mph:.1f} mph, "
                         f"club={shot.club_speed_mph}, "

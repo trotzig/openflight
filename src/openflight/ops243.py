@@ -838,6 +838,7 @@ class OPS243Radar:
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
 
+        print(f"[RADAR] Entering rolling buffer mode (S#{pre_trigger_segments})...")
         logger.info("Entering rolling buffer mode (pre_trigger_segments=%d)...",
                     pre_trigger_segments)
 
@@ -885,6 +886,7 @@ class OPS243Radar:
         # to ensure stable state before accepting triggers
         time.sleep(0.3)
 
+        print(f"[RADAR] Rolling buffer mode ACTIVE (S#{pre_trigger_segments}, 30ksps)")
         logger.info("Rolling buffer mode active (S#%d, 30ksps)",
                     pre_trigger_segments)
 

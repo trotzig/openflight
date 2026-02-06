@@ -478,6 +478,7 @@ class GPIOSoundTrigger(TriggerStrategy):
         self._button.when_pressed = on_trigger
         self._gpio_initialized = True
 
+        print(f"[GPIO] Pin {self.gpio_pin} configured for sound trigger (debounce={self.debounce_ms}ms)")
         logger.info(
             "GPIO%d configured for sound trigger (debounce=%dms)",
             self.gpio_pin, self.debounce_ms
@@ -503,6 +504,7 @@ class GPIOSoundTrigger(TriggerStrategy):
             logger.error("GPIO initialization failed")
             return None
 
+        print(f"[GPIO] Waiting for sound trigger on GPIO{self.gpio_pin}...")
         logger.info(
             "Waiting for GPIO sound trigger on GPIO%d (timeout=%ss, S#%s)...",
             self.gpio_pin, timeout, self.pre_trigger_segments
@@ -514,17 +516,20 @@ class GPIOSoundTrigger(TriggerStrategy):
         while (time.time() - start_time) < timeout:
             if self._trigger_event["triggered"]:
                 self._trigger_event["triggered"] = False
+                print("[GPIO] Edge detected! Sending S! trigger...")
                 logger.info("GPIO edge detected! Triggering radar capture...")
 
                 # Send S! to trigger the radar capture
                 response = radar.trigger_capture(timeout=5.0)
 
                 if not response:
+                    print("[GPIO] No response from radar!")
                     logger.warning("No response from radar after S! trigger")
                     radar.rearm_rolling_buffer()
                     time.sleep(0.3)  # Extra time for buffer to fill
                     continue
 
+                print(f"[GPIO] Capture received: {len(response)} bytes")
                 logger.info("Capture received, %d bytes", len(response))
                 # Debug: log first 500 chars of response to see what we got
                 if len(response) < 5000:
