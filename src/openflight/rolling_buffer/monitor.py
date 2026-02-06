@@ -265,7 +265,8 @@ class RollingBufferMonitor:
         Connect to radar and configure based on trigger type.
 
         For "speed" trigger: Configuration is handled by the trigger strategy
-        For other triggers: Configure for rolling buffer mode
+        For other triggers: Configure for rolling buffer mode with appropriate
+        pre_trigger_segments from the trigger.
 
         Returns:
             True if successful
@@ -275,7 +276,10 @@ class RollingBufferMonitor:
         # Speed trigger handles its own configuration (starts in speed mode)
         # Other triggers need rolling buffer mode configured upfront
         if self.trigger_type != "speed":
-            self.radar.configure_for_rolling_buffer()
+            # Get pre_trigger_segments from the trigger if available
+            pre_trigger_segments = getattr(self.trigger, 'pre_trigger_segments', 12)
+            self.radar.configure_for_rolling_buffer(pre_trigger_segments=pre_trigger_segments)
+            logger.info("Rolling buffer mode configured with S#%d", pre_trigger_segments)
         else:
             logger.info("Using speed trigger - configuration deferred to trigger")
 

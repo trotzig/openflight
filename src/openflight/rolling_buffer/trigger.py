@@ -415,6 +415,10 @@ class GPIOSoundTrigger(TriggerStrategy):
 
     Wiring: SEN-14262 GATE → Pi GPIO pin (default: GPIO17, physical pin 11)
 
+    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
+    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
+    before calling wait_for_trigger().
+
     This is a workaround for voltage level issues where the SEN-14262 GATE
     doesn't reach the 3.3V threshold required by HOST_INT. The Pi GPIO has
     a lower voltage threshold (~1.8V vs ~2.0V), making it more reliable.
@@ -441,12 +445,13 @@ class GPIOSoundTrigger(TriggerStrategy):
             pre_trigger_segments: Number of pre-trigger segments for S# command.
                 Each segment = 128 samples = ~4.27ms at 30ksps.
                 Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
+                The trigger does NOT configure rolling buffer mode itself.
             debounce_ms: Debounce time in ms to ignore rapid triggers (default: 200)
         """
         self.gpio_pin = gpio_pin
         self.pre_trigger_segments = pre_trigger_segments
         self.debounce_ms = debounce_ms
-        self._split_configured = False
         self._button = None
         self._trigger_event = {"triggered": False}
         self._gpio_initialized = False
@@ -488,42 +493,15 @@ class GPIOSoundTrigger(TriggerStrategy):
         """
         Wait for GPIO sound trigger and capture buffer.
 
+        PREREQUISITE: Rolling buffer mode must already be configured via
+        radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode().
+
         Unlike direct SoundTrigger (HOST_INT), this uses Pi GPIO to detect
         the SEN-14262 GATE signal, then sends S! to trigger the capture.
         """
         if not self._init_gpio():
             logger.error("GPIO initialization failed")
             return None
-
-        # Set pre-trigger split once (persists across captures)
-        if not self._split_configured:
-            # Verify rolling buffer mode is active
-            if radar.serial:
-                radar.serial.reset_input_buffer()
-                radar.serial.write(b"G?")
-                time.sleep(0.1)
-                mode_response = ""
-                while radar.serial.in_waiting:
-                    mode_response += radar.serial.read(
-                        radar.serial.in_waiting
-                    ).decode('ascii', errors='ignore')
-                    time.sleep(0.02)
-                logger.info("Current mode (G?): %s", mode_response.strip())
-
-                # If not in rolling buffer mode, enable it
-                if "Cont" not in mode_response and "Rolling" not in mode_response:
-                    logger.warning("Not in rolling buffer mode, re-enabling GC...")
-                    radar.serial.write(b"GC")
-                    time.sleep(0.1)
-                    radar.serial.write(b"PA")
-                    time.sleep(0.1)
-
-            radar.set_trigger_split(self.pre_trigger_segments)
-            self._split_configured = True
-            # Wait for rolling buffer to fill with data
-            # At 30ksps, 4096 samples takes ~137ms, but we wait longer to ensure stable state
-            logger.info("Waiting for buffer to fill...")
-            time.sleep(0.5)
 
         logger.info(
             "Waiting for GPIO sound trigger on GPIO%d (timeout=%ss, S#%s)...",
@@ -604,7 +582,6 @@ class GPIOSoundTrigger(TriggerStrategy):
 
     def reset(self):
         """Reset trigger state."""
-        self._split_configured = False
         self._trigger_event["triggered"] = False
 
     def cleanup(self):
@@ -618,6 +595,10 @@ class GPIOSoundTrigger(TriggerStrategy):
 class GPIOPassthroughTrigger(TriggerStrategy):
     """
     Ultra-low-latency GPIO passthrough trigger using Pi as voltage booster.
+
+    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
+    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
+    before calling wait_for_trigger().
 
     Wiring:
         SEN-14262 GATE → Pi GPIO17 (input, default)
@@ -657,13 +638,14 @@ class GPIOPassthroughTrigger(TriggerStrategy):
             pre_trigger_segments: Number of pre-trigger segments for S# command.
                 Each segment = 128 samples = ~4.27ms at 30ksps.
                 Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
+                The trigger does NOT configure rolling buffer mode itself.
             pulse_width_us: Pulse width in microseconds (default: 100)
         """
         self.input_pin = input_pin
         self.output_pin = output_pin
         self.pre_trigger_segments = pre_trigger_segments
         self.pulse_width_us = pulse_width_us
-        self._split_configured = False
         self._handle = None
         self._gpio_initialized = False
 
@@ -731,6 +713,9 @@ class GPIOPassthroughTrigger(TriggerStrategy):
         """
         Wait for hardware trigger (fired by GPIO passthrough).
 
+        PREREQUISITE: Rolling buffer mode must already be configured via
+        radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode().
+
         The GPIO passthrough fires HOST_INT directly via hardware callback.
         We just wait for the radar to dump its buffer via serial.
         """
@@ -738,14 +723,9 @@ class GPIOPassthroughTrigger(TriggerStrategy):
             logger.error("GPIO passthrough initialization failed")
             return None
 
-        # Set pre-trigger split once (persists across captures)
-        if not self._split_configured:
-            radar.set_trigger_split(self.pre_trigger_segments)
-            self._split_configured = True
-
         logger.info(
-            "Waiting for GPIO passthrough trigger: GPIO%d→GPIO%d (timeout=%ss, S#%s)...",
-            self.input_pin, self.output_pin, timeout, self.pre_trigger_segments
+            "Waiting for GPIO passthrough trigger: GPIO%d→GPIO%d (timeout=%ss)...",
+            self.input_pin, self.output_pin, timeout
         )
 
         # Use existing wait_for_hardware_trigger - radar triggered via HOST_INT
@@ -784,7 +764,7 @@ class GPIOPassthroughTrigger(TriggerStrategy):
 
     def reset(self):
         """Reset trigger state."""
-        self._split_configured = False
+        pass  # No state to reset
 
     def cleanup(self):
         """Clean up GPIO resources."""
@@ -803,6 +783,10 @@ class GPIOPassthroughTrigger(TriggerStrategy):
 class SoundTrigger(TriggerStrategy):
     """
     Hardware sound trigger using SparkFun SEN-14262.
+
+    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
+    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
+    before calling wait_for_trigger().
 
     Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
     The GATE output goes HIGH on loud sound (club impact).
@@ -826,10 +810,10 @@ class SoundTrigger(TriggerStrategy):
             pre_trigger_segments: Number of pre-trigger segments for S# command.
                 Each segment = 128 samples = ~4.27ms at 30ksps.
                 Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
-                Tune based on mic-to-impact distance.
+                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
+                The trigger does NOT configure rolling buffer mode itself.
         """
         self.pre_trigger_segments = pre_trigger_segments
-        self._split_configured = False
 
     def wait_for_trigger(
         self,
@@ -840,19 +824,17 @@ class SoundTrigger(TriggerStrategy):
         """
         Wait for hardware sound trigger and capture buffer.
 
+        PREREQUISITE: Rolling buffer mode must already be configured via
+        radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode().
+
         Unlike other triggers, no S! command is sent. The radar's
         HOST_INT pin receives the trigger from the SEN-14262 GATE
         output, causing the radar to dump its rolling buffer automatically.
         We just block on serial read waiting for the I/Q data to arrive.
         """
-        # Set pre-trigger split once (persists across captures)
-        if not self._split_configured:
-            radar.set_trigger_split(self.pre_trigger_segments)
-            self._split_configured = True
-
         logger.info(
-            "Waiting for hardware sound trigger (timeout=%ss, S#%s)...",
-            timeout, self.pre_trigger_segments
+            "Waiting for hardware sound trigger (timeout=%ss)...",
+            timeout
         )
 
         response = radar.wait_for_hardware_trigger(timeout=timeout)
@@ -893,7 +875,7 @@ class SoundTrigger(TriggerStrategy):
 
     def reset(self):
         """Reset trigger state."""
-        self._split_configured = False
+        pass  # No state to reset
 
 
 def create_trigger(trigger_type: str = "speed", **kwargs) -> TriggerStrategy:

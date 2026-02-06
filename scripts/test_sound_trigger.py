@@ -117,8 +117,7 @@ def run(port: str, pre_trigger_segments: int, swings_only: bool, timeout: float)
 
     # --- Configure rolling buffer mode ---
     print(f"Configuring rolling buffer mode (S#{pre_trigger_segments})...")
-    radar.configure_for_rolling_buffer()
-    radar.set_trigger_split(pre_trigger_segments)
+    radar.configure_for_rolling_buffer(pre_trigger_segments=pre_trigger_segments)
 
     # --- Set up FFT processor ---
     processor = RollingBufferProcessor()

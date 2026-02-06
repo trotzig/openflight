@@ -14,8 +14,7 @@ radar.connect()
 print(f"Connected on {radar.port}")
 
 print("Configuring rolling buffer mode...")
-radar.configure_for_rolling_buffer()
-radar.set_trigger_split(12)
+radar.configure_for_rolling_buffer(pre_trigger_segments=12)
 
 print()
 print("=" * 50)

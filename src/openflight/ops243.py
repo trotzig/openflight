@@ -814,31 +814,92 @@ class OPS243Radar:
     # Rolling Buffer Mode (G1)
     # =========================================================================
 
+    def enter_rolling_buffer_mode(self, pre_trigger_segments: int = 12):
+        """
+        Enter rolling buffer mode using the verified working sequence.
+
+        This is the SINGLE SOURCE OF TRUTH for entering rolling buffer mode.
+        All other methods that need rolling buffer mode should call this.
+
+        The sequence follows OmniPreSense API doc AN-010-AD exactly:
+        1. PI - reset to idle (clean state)
+        2. GC - enter rolling buffer mode
+        3. PA - activate sampling
+        4. S=30 - set sample rate (with \\r)
+        5. S#n - set trigger split (with \\r)
+        6. PA - reactivate (CRITICAL after settings changes)
+        7. Wait for buffer to fill
+
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments (0-32).
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+        """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
+        logger.info("Entering rolling buffer mode (pre_trigger_segments=%d)...",
+                    pre_trigger_segments)
+
+        # Clear any stale data
+        self.serial.reset_input_buffer()
+
+        # Step 1: Reset to idle for clean state
+        self.serial.write(b"PI")
+        time.sleep(0.2)
+        logger.debug("PI: reset to idle")
+
+        # Step 2: Enter rolling buffer mode
+        self.serial.write(b"GC")
+        time.sleep(0.1)
+        logger.debug("GC: rolling buffer mode")
+
+        # Step 3: Activate sampling
+        self.serial.write(b"PA")
+        time.sleep(0.1)
+        logger.debug("PA: activate sampling")
+
+        # Step 4: Set sample rate (30ksps for golf) - requires \r
+        self.serial.write(b"S=30\r")
+        self.serial.flush()
+        time.sleep(0.15)
+        logger.debug("S=30: 30ksps sample rate")
+
+        # Step 5: Set trigger split - requires \r
+        pre_trigger_segments = max(0, min(32, pre_trigger_segments))
+        self.serial.write(f"S#{pre_trigger_segments}\r".encode())
+        self.serial.flush()
+        time.sleep(0.15)
+        logger.debug("S#%d: pre-trigger segments", pre_trigger_segments)
+
+        # Step 6: CRITICAL - Reactivate after settings changes
+        self.serial.write(b"PA")
+        time.sleep(0.1)
+        logger.debug("PA: reactivate sampling")
+
+        # Clear any response data from commands
+        self.serial.reset_input_buffer()
+
+        # Step 7: Wait for buffer to fill
+        # At 30ksps, 4096 samples takes ~137ms, but we wait a bit longer
+        # to ensure stable state before accepting triggers
+        time.sleep(0.3)
+
+        logger.info("Rolling buffer mode active (S#%d, 30ksps)",
+                    pre_trigger_segments)
+
     def enable_rolling_buffer(self):
         """
         Enable rolling buffer mode for raw I/Q capture.
 
-        Rolling buffer mode (GC) captures 4096 raw I/Q samples instead of
-        processing them internally. This allows post-capture FFT processing
-        with overlapping windows for higher temporal resolution and spin detection.
+        DEPRECATED: Use enter_rolling_buffer_mode() instead for reliable configuration.
 
-        Commands:
-        - GC: Enable rolling buffer (Continuous Sampling Mode)
-        - PA: Activate sampling (required to start data capture loop)
-
-        After enabling, use trigger_capture() or hardware trigger (HOST_INT) to dump the buffer.
+        This method is kept for backwards compatibility but internally calls
+        enter_rolling_buffer_mode() with default settings.
         """
-        logger.info("Enabling rolling buffer mode...")
-
-        # Enable rolling buffer mode
-        response = self._send_command("GC")
-        time.sleep(0.1)
-        logger.info("GC response: %s", response if response else '(none)')
-
-        # Activate sampling - puts sensor into active data capture loop
-        self._send_command("PA")
-        time.sleep(0.1)
-        logger.info("Rolling buffer mode enabled and sampling activated")
+        logger.warning("enable_rolling_buffer() is deprecated, "
+                       "use enter_rolling_buffer_mode() instead")
+        self.enter_rolling_buffer_mode()
 
     def disable_rolling_buffer(self):
         """
@@ -855,6 +916,10 @@ class OPS243Radar:
         """
         Set the pre/post trigger data split for rolling buffer.
 
+        NOTE: This is automatically called by enter_rolling_buffer_mode().
+        Only use this method directly if you need to change the split
+        without re-entering rolling buffer mode.
+
         The S#n command controls how much historical data is included:
         - n=0: Only new samples (0% pre-trigger)
         - n=8: Default (25% pre-trigger = 1024 samples)
@@ -869,14 +934,25 @@ class OPS243Radar:
         Args:
             segments: Number of pre-trigger segments (0-32)
         """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
         segments = max(0, min(32, segments))
-        self._send_command(f"S#{segments}")
+
+        # Use direct serial write with \r for reliability
+        self.serial.write(f"S#{segments}\r".encode())
+        self.serial.flush()
+        time.sleep(0.15)
         logger.info("Trigger split set to %s segments", segments)
 
         # CRITICAL: Reactivate sampling after changing settings
         # Per API doc: settings changes may interrupt the sampling loop
-        self._send_command("PA")
+        self.serial.write(b"PA")
+        self.serial.flush()
         time.sleep(0.1)
+
+        # Clear any response data
+        self.serial.reset_input_buffer()
         logger.info("Sampling reactivated after trigger split change")
 
     def trigger_capture(self, timeout: float = 10.0) -> str:
@@ -1013,40 +1089,62 @@ class OPS243Radar:
 
         return full_response
 
-    def rearm_rolling_buffer(self):
+    def rearm_rolling_buffer(self, pre_trigger_segments: int = 12):
         """
         Re-arm rolling buffer for next capture.
 
         After trigger_capture() outputs data, the sensor pauses in Idle mode.
-        Send GC again to restart sampling for next capture.
+        This method re-enters rolling buffer mode to be ready for the next capture.
 
-        Per testing, adequate delays are needed:
-        - 0.1s after GC for mode switch
-        - 0.2s after PA for buffer to start filling
+        Uses a simplified sequence since we're already in the right mode:
+        1. GC - re-enable rolling buffer mode
+        2. PA - activate sampling
+        3. Wait for buffer to fill
+
+        NOTE: Sample rate persists, so we don't need to set S=30 again.
+        However, trigger split (S#n) may need to be reset if it was changed.
+
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments (0-32).
+                Pass the same value used in enter_rolling_buffer_mode().
         """
-        if self.serial:
-            self.serial.reset_input_buffer()
-        self._send_command("GC")  # Re-enable rolling buffer mode
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+
+        # Clear any stale data
+        self.serial.reset_input_buffer()
+
+        # Re-enable rolling buffer mode
+        self.serial.write(b"GC")
+        self.serial.flush()
         time.sleep(0.1)
-        self._send_command("PA")  # Activate sampling
+
+        # Activate sampling
+        self.serial.write(b"PA")
+        self.serial.flush()
         time.sleep(0.2)  # Allow buffer to start filling
 
-    def configure_for_rolling_buffer(self):
+        logger.debug("Rolling buffer re-armed")
+
+    def configure_for_rolling_buffer(self, pre_trigger_segments: int = 12):
         """
         Configure radar optimally for rolling buffer mode.
 
-        Similar to configure_for_golf() but sets up for rolling buffer mode:
-        - 30ksps sample rate (max ~208 mph, required for golf)
+        This is the high-level API for entering rolling buffer mode.
+        Internally calls enter_rolling_buffer_mode() which uses the
+        verified working sequence.
+
+        Settings:
+        - Units: MPH
+        - Transmit power: Level 3 (reduced to avoid ADC clipping)
+        - Sample rate: 30ksps (max ~208 mph, required for golf)
         - Rolling buffer enabled (GC command)
-        - Trigger split for ~34ms pre-trigger data
+        - Trigger split: Configurable pre-trigger segments
 
-        Note: Sample rate must be set AFTER enabling rolling buffer mode
-        as the GC command may reset to default 10ksps.
-
-        Based on OmniPreSense reference implementation:
-        1. PI - deactivate to reset state
-        2. GC - enable rolling buffer mode
-        3. S=30 - set sample rate (30ksps for golf)
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments (0-32).
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
         """
         # Set units to MPH first
         self.set_units(SpeedUnit.MPH)
@@ -1057,37 +1155,8 @@ class OPS243Radar:
         self.set_transmit_power(3)
         logger.info("Transmit power: level 3 (reduced to avoid clipping)")
 
-        # Per OmniPreSense reference: deactivate first to reset state
-        self._send_command("PI")
-        time.sleep(0.1)
-        logger.info("Deactivated (PI) to reset state")
-
-        # Enable rolling buffer mode
-        self.enable_rolling_buffer()
-
-        # IMPORTANT: Set sample rate AFTER enabling rolling buffer
-        # GC mode defaults to 10ksps, we need 30ksps for golf
-        self.set_sample_rate(30000)
-        time.sleep(0.1)
-        logger.info("Sample rate set to 30ksps")
-
-        # Verify sample rate was set correctly
-        response = self._send_command("S?")
-        logger.info("Sample rate check: %s", response)
-
-        # Parse and warn if not 30ksps
-        try:
-            if response:
-                data = json.loads(response)
-                rate = data.get("SampleRate", data.get("Sampling Rate", 0))
-                if rate and rate != 30000:
-                    logger.warning("Sample rate is %s, expected 30000!", rate)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Set trigger split (8 segments = ~34ms pre-trigger)
-        # Note: set_trigger_split() now automatically reactivates sampling with PA
-        self.set_trigger_split(8)
+        # Enter rolling buffer mode using the single source of truth
+        self.enter_rolling_buffer_mode(pre_trigger_segments=pre_trigger_segments)
 
         logger.info("Rolling buffer mode configured")
 
