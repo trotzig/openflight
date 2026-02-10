@@ -196,7 +196,7 @@ function AppContent() {
         {currentView === "live" && (
           <div className="live-view">
             {latestShot && (
-              <div key={latestShot.timestamp} className="shot-flash" />
+              <div key={`shot-flash-${latestShot.timestamp}`} className="shot-flash" />
             )}
             <ShotDisplay
               key={latestShot?.timestamp}
